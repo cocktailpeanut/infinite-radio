@@ -236,29 +236,84 @@ class EpisodeRenderer:
         print(f"[episodes] done '{job['name']}' {total:.0f}s -> {out_mp4}", flush=True)
 
     # ---------- pieces ----------
-    def _render_cards(self, job: dict, tracks: list[dict], total: float, work: Path) -> list[dict]:
-        """Returns [{path, start, end}] including the intro card and a persistent lockup."""
-        cards = []
+    # Card geometry: every card image shares one canvas so they can form a single
+    # variable-frame-rate sequence (ffmpeg's concat demuxer needs equal sizes).
+    CARD_X, CARD_H = 72, 160
+    CARD_W = W - 144
+    CARD_Y = H - 232
+
+    def _render_cards(self, job: dict, tracks: list[dict], total: float, work: Path) -> dict:
+        """Draw the intro card, the lockup, and one VFR card sequence for all songs.
+
+        Returns {"intro": path, "lockup": path, "cards": ffconcat path, "lockup_x": int, "lockup_y": int}.
+        Instead of one full-frame input per song (which ffmpeg decodes on every
+        output frame), the cards are small images with the fades baked in, listed
+        in an ffconcat file with explicit durations, so ffmpeg decodes a new
+        image only when the picture actually changes.
+        """
         f_kicker, f_title, f_sub = load_font(26), load_font(54), load_font(26)
         n = len(tracks)
+        cards_dir = work / "cards"
+        cards_dir.mkdir(exist_ok=True)
+        fade_in_frames = int(round(CARD_FADE_IN * FPS))
+        fade_out_frames = int(round(CARD_FADE_OUT * FPS))
+        frame_dt = 1.0 / FPS
+        empty = Image.new("RGBA", (self.CARD_W, self.CARD_H), (0, 0, 0, 0))
+        empty_path = cards_dir / "empty.png"
+        empty.save(empty_path)
+        lines = ["ffconcat version 1.0"]
+        cursor = 0.0
+
+        def add(path: Path, duration: float) -> None:
+            nonlocal cursor
+            if duration <= 0:
+                return
+            lines.append(f"file '{path.as_posix()}'")
+            lines.append(f"duration {duration:.4f}")
+            cursor += duration
+
+        def faded(base: Image.Image, alpha: float) -> Image.Image:
+            out = base.copy()
+            out.putalpha(out.getchannel("A").point(lambda v: int(v * alpha)))
+            return out
+
         for i, t in enumerate(tracks):
-            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            d = ImageDraw.Draw(img)
-            x0, y0 = 72, H - 232
+            base = Image.new("RGBA", (self.CARD_W, self.CARD_H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(base)
             title = t["title"]
             tw = d.textlength(title, font=f_title)
-            tags = ", ".join([s.strip() for s in t.get("style", "").split(",")[1:5] if s.strip()])
-            box_w = int(max(560, min(W - 144, max(tw, d.textlength(tags, font=f_sub)) + 72)))
-            d.rounded_rectangle([x0, y0, x0 + box_w, y0 + 160], radius=16, fill=(8, 8, 16, 165))
-            d.text((x0 + 32, y0 + 24), f"NOW PLAYING  ·  {i + 1:02d} / {n:02d}", font=f_kicker, fill=(34, 211, 238, 255))
-            d.text((x0 + 32, y0 + 58), title, font=f_title, fill=(245, 245, 250, 255))
-            d.text((x0 + 32, y0 + 120), tags[:90], font=f_sub, fill=(176, 178, 196, 255))
-            p = work / f"card{i:03d}.png"
-            img.save(p)
+            tags = ", ".join([x.strip() for x in t.get("style", "").split(",")[1:5] if x.strip()])
+            box_w = int(max(560, min(self.CARD_W, max(tw, d.textlength(tags, font=f_sub)) + 72)))
+            d.rounded_rectangle([0, 0, box_w, self.CARD_H], radius=16, fill=(8, 8, 16, 165))
+            d.text((32, 24), f"NOW PLAYING  ·  {i + 1:02d} / {n:02d}", font=f_kicker, fill=(34, 211, 238, 255))
+            d.text((32, 58), title, font=f_title, fill=(245, 245, 250, 255))
+            d.text((32, 120), tags[:90], font=f_sub, fill=(176, 178, 196, 255))
             start = t["start"] if i else INTRO_SECONDS
             end = tracks[i + 1]["start"] if i + 1 < n else total
-            if end - start > 2.0:
-                cards.append({"path": p, "start": start, "end": end})
+            if end - start <= 2.0:
+                continue
+            # gap before this card (transparent)
+            add(empty_path, start - cursor)
+            # fade in, hold, fade out
+            for k in range(fade_in_frames):
+                p = cards_dir / f"c{i:03d}_in{k:02d}.png"
+                faded(base, (k + 1) / fade_in_frames).save(p)
+                add(p, frame_dt)
+            hold_path = cards_dir / f"c{i:03d}_hold.png"
+            base.save(hold_path)
+            fade_out_start = max(start + CARD_FADE_IN, end - CARD_FADE_OUT)
+            add(hold_path, fade_out_start - cursor)
+            for k in range(fade_out_frames):
+                p = cards_dir / f"c{i:03d}_out{k:02d}.png"
+                faded(base, (fade_out_frames - k) / fade_out_frames).save(p)
+                add(p, frame_dt)
+        # trailing transparent segment to the end; the last entry is repeated so
+        # the concat demuxer honours its duration.
+        add(empty_path, max(frame_dt, total + 1.0 - cursor))
+        lines.append(f"file '{empty_path.as_posix()}'")
+        concat_path = work / "cards.ffconcat"
+        concat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
         # Intro: set name large, first seconds (also what YouTube tends to pick as a thumbnail)
         intro = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(intro)
@@ -270,44 +325,72 @@ class EpisodeRenderer:
         sub = f"{job['station']}  ·  {_plural(n, 'song')}  ·  {format_timestamp(total)}"
         sw = d.textlength(sub, font=f_small)
         d.text(((W - sw) / 2, H / 2 + 30), sub, font=f_small, fill=(190, 192, 210, 255))
-        p = work / "intro.png"
-        intro.save(p)
-        cards.insert(0, {"path": p, "start": 0.0, "end": INTRO_SECONDS})
-        # Lockup: small brand, always on
-        lock = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        d = ImageDraw.Draw(lock)
+        intro_path = work / "intro.png"
+        intro.save(intro_path)
+
+        # Lockup: small brand image, placed top-right by the overlay
         f_lock = load_font(24)
         text = f"INFINITE RADIO  ·  {job['station']}"
-        lw = d.textlength(text, font=f_lock)
-        d.text((W - lw - 64, 48), text, font=f_lock, fill=(230, 230, 240, 215))
-        p = work / "lockup.png"
-        lock.save(p)
-        cards.append({"path": p, "start": 0.0, "end": total, "static": True})
-        return cards
+        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        lw = int(probe.textlength(text, font=f_lock)) + 8
+        lock = Image.new("RGBA", (max(lw, 8), 40), (0, 0, 0, 0))
+        ImageDraw.Draw(lock).text((4, 4), text, font=f_lock, fill=(230, 230, 240, 215))
+        lock_path = work / "lockup.png"
+        lock.save(lock_path)
+        return {"intro": intro_path, "lockup": lock_path, "cards": concat_path, "lockup_x": W - lw - 64, "lockup_y": 44}
 
-    def _encode(self, ffmpeg: str, job_id: str, loop: Path, wav: Path, cards: list[dict], total: float, out: Path) -> None:
-        inputs = [ffmpeg, "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
-                  "-stream_loop", "-1", "-i", str(loop), "-i", str(wav)]
-        filters = []
-        prev = "[0:v]"
-        for k, c in enumerate(cards):
-            idx = 2 + k
-            inputs += ["-loop", "1", "-framerate", str(FPS), "-i", str(c["path"])]
-            lbl = f"[c{k}]"
-            if c.get("static"):
-                filters.append(f"[{idx}:v]format=rgba{lbl}")
-                filters.append(f"{prev}{lbl}overlay=0:0:shortest=0[v{k}]")
-            else:
-                st, en = c["start"], c["end"]
-                fo = max(st + CARD_FADE_IN, en - CARD_FADE_OUT)
-                filters.append(f"[{idx}:v]format=rgba,fade=t=in:st={st:.3f}:d={CARD_FADE_IN}:alpha=1,fade=t=out:st={fo:.3f}:d={CARD_FADE_OUT}:alpha=1{lbl}")
-                filters.append(f"{prev}{lbl}overlay=0:0:shortest=0:enable='between(t,{st:.3f},{en:.3f})'[v{k}]")
-            prev = f"[v{k}]"
-        filters.append(f"{prev}format=yuv420p[vout]")
-        cmd = inputs + ["-filter_complex", ";".join(filters), "-map", "[vout]", "-map", "1:a",
-                        "-t", f"{total:.3f}", "-r", str(FPS),
-                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+    # ---------- encoder selection ----------
+    _encoder_cache: dict[str, list[str]] = {}
+
+    def _video_encoder(self, ffmpeg: str, allow_hw: bool) -> list[str]:
+        """Return encoder args. Hardware encoders when available and allowed, else libx264."""
+        key = f"{ffmpeg}:{allow_hw}"
+        if key in self._encoder_cache:
+            return self._encoder_cache[key]
+        software = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p"]
+        chosen = software
+        if allow_hw:
+            try:
+                listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30).stdout
+            except Exception:
+                listing = ""
+            candidates = [
+                ("h264_videotoolbox", ["-c:v", "h264_videotoolbox", "-b:v", "6M", "-maxrate", "8M", "-bufsize", "16M", "-profile:v", "high", "-pix_fmt", "yuv420p"]),
+                ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "6M", "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p"]),
+                ("h264_amf", ["-c:v", "h264_amf", "-quality", "balanced", "-b:v", "6M", "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p"]),
+                ("h264_qsv", ["-c:v", "h264_qsv", "-preset", "medium", "-b:v", "6M", "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "nv12"]),
+            ]
+            for name, args in candidates:
+                if name not in listing:
+                    continue
+                # Probe: encode a few frames so a listed-but-unusable encoder falls through.
+                probe = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30", "-t", "0.5",
+                                        *args, "-f", "null", "-"], capture_output=True, text=True, timeout=60)
+                if probe.returncode == 0:
+                    chosen = args
+                    print(f"[episodes] using hardware encoder {name}", flush=True)
+                    break
+        self._encoder_cache[key] = chosen
+        return chosen
+
+    def _encode(self, ffmpeg: str, job_id: str, loop: Path, wav: Path, cards: dict, total: float, out: Path) -> None:
+        settings = self.scene.snapshot().get("settings", {})
+        enc = self._video_encoder(ffmpeg, bool(settings.get("hw_encode", True)))
+        intro_fo = max(CARD_FADE_IN, INTRO_SECONDS - CARD_FADE_OUT)
+        cmd = [ffmpeg, "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
+               "-stream_loop", "-1", "-i", str(loop),                                   # 0: scene loop
+               "-i", str(wav),                                                           # 1: mix
+               "-loop", "1", "-framerate", str(FPS), "-t", f"{INTRO_SECONDS:.3f}", "-i", str(cards["intro"]),  # 2: intro (6 s only)
+               "-safe", "0", "-f", "concat", "-i", str(cards["cards"]),                 # 3: card sequence (VFR)
+               "-loop", "1", "-framerate", "1", "-i", str(cards["lockup"]),              # 4: lockup (1 fps)
+               "-filter_complex",
+               f"[2:v]format=rgba,fade=t=in:st=0:d={CARD_FADE_IN}:alpha=1,fade=t=out:st={intro_fo:.3f}:d={CARD_FADE_OUT}:alpha=1[intro];"
+               f"[3:v]format=rgba[cards];[4:v]format=rgba[lock];"
+               f"[0:v][intro]overlay=0:0:eof_action=pass[v1];"
+               f"[v1][cards]overlay={self.CARD_X}:{self.CARD_Y}:eof_action=pass[v2];"
+               f"[v2][lock]overlay={cards['lockup_x']}:{cards['lockup_y']}:eof_action=repeat,format=yuv420p[vout]",
+               "-map", "[vout]", "-map", "1:a", "-t", f"{total:.3f}", "-r", str(FPS),
+               *enc, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self._proc = proc
         try:

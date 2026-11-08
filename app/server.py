@@ -123,6 +123,7 @@ class ScenePatch(BaseModel):
     vignette: bool | None = None
     pingpong: bool | None = None
     loop_seconds: int | None = None
+    hw_encode: bool | None = None
 
 
 class PlayerEvent(BaseModel):

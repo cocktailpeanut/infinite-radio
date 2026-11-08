@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = {
     "vignette": True,
     "pingpong": False,       # video loops only
     "loop_seconds": 24,
+    "hw_encode": True,       # use VideoToolbox / NVENC / AMF / QSV when available
 }
 
 MOOD_PALETTES = {
@@ -192,7 +193,8 @@ class Scene:
         with self.lock:
             src = SCENE_DIR / self.state["file"] if self.state["file"] else None
             stamp = f"{src.stat().st_mtime_ns}:{src.stat().st_size}" if src and src.exists() else "none"
-            payload = json.dumps({"kind": self.state["kind"], "stamp": stamp, "settings": self.state["settings"],
+            visual = {k: v for k, v in self.state["settings"].items() if k != "hw_encode"}
+            payload = json.dumps({"kind": self.state["kind"], "stamp": stamp, "settings": visual,
                                   "mood": mood if self.state["kind"] == "none" else "", "title": title if self.state["kind"] == "none" else ""}, sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()[:16]
 

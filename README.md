@@ -125,8 +125,11 @@ Upload is manual: drag `episode.mp4` into YouTube Studio, paste `description.txt
 `thumbnail.png`. There is no YouTube API integration by design.
 
 A 24-second scene loop renders once per scene (about two minutes on an M1 Max) and is
-cached; encoding runs at roughly 4 to 6 times realtime, so an hour-long episode takes
-10 to 15 minutes.
+cached. Title cards are fed to ffmpeg as one variable-frame-rate sequence, so encode
+speed does not depend on the number of songs: about 3.5× realtime with libx264 and
+5 to 6× with a hardware encoder (VideoToolbox, NVENC, AMF or QuickSync, picked
+automatically; the **Hardware encoder** toggle in Scene settings turns it off). An
+hour-long episode takes roughly 11 to 17 minutes.
 
 ## How it works
 
