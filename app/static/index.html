@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infinite Radio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="bg-glow" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <span class="brand-name">INFINITE<span>RADIO</span></span>
+  </div>
+  <div class="topbar-status">
+    <span id="onair" class="pill pill-off">OFF AIR</span>
+    <span id="engine-pill" class="pill pill-engine" title="audio.cpp engine">engine: starting</span>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- Station controls -->
+  <aside class="panel station">
+    <h2>Station</h2>
+    <p class="hint">Describe the vibe. YuE2 sings in English only, so keep style prompts in English.</p>
+
+    <div class="presets" id="presets"></div>
+
+    <label class="field">
+      <span>Style prompt</span>
+      <textarea id="f-style" rows="3" spellcheck="false"></textarea>
+    </label>
+
+    <div class="row2">
+      <label class="field">
+        <span>Mood</span>
+        <select id="f-mood"></select>
+      </label>
+      <label class="field">
+        <span>Vocals</span>
+        <select id="f-lyric-mode">
+          <option value="auto">Auto lyrics</option>
+          <option value="instrumental">Instrumental</option>
+          <option value="custom-only">My requests only</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Lyric themes <em>(optional, comma separated)</em></span>
+      <input id="f-themes" type="text" placeholder="ocean, late night driving, letting go">
+    </label>
+
+    <label class="field range">
+      <span>Target length <b id="f-len-label">2:00</b></span>
+      <input id="f-len" type="range" min="30" max="360" step="15" value="120">
+    </label>
+
+    <div class="row2">
+      <label class="field">
+        <span>Buffer ahead</span>
+        <select id="f-lookahead">
+          <option value="1">1 song</option>
+          <option value="2">2 songs</option>
+          <option value="3">3 songs</option>
+          <option value="4">4 songs</option>
+        </select>
+      </label>
+      <label class="field check">
+        <span>Score planning</span>
+        <input id="f-planning" type="checkbox">
+        <small>Slower, more structured songs</small>
+      </label>
+    </div>
+
+    <button id="save" class="btn btn-ghost">Save station</button>
+    <p id="save-note" class="hint ok" hidden>Saved. New songs use these settings.</p>
+
+    <details class="requests">
+      <summary>Request a song with your own lyrics</summary>
+      <label class="field"><span>Title <em>(optional)</em></span><input id="r-title" type="text"></label>
+      <label class="field"><span>Lyrics</span>
+        <textarea id="r-lyrics" rows="6" placeholder="[Verse]&#10;...&#10;[Chorus]&#10;..."></textarea>
+      </label>
+      <label class="field"><span>Style override <em>(optional)</em></span><input id="r-style" type="text"></label>
+      <button id="r-send" class="btn btn-ghost">Queue request</button>
+      <ul id="r-list" class="mini-list"></ul>
+    </details>
+  </aside>
+
+  <!-- Now playing -->
+  <section class="panel player">
+    <div class="art-wrap">
+      <div id="art" class="art">
+        <div class="art-ring"></div>
+        <div class="art-core"></div>
+      </div>
+      <canvas id="viz" width="900" height="160"></canvas>
+    </div>
+
+    <div class="np">
+      <div class="np-kicker" id="np-kicker">Nothing playing</div>
+      <h1 id="np-title">Tune in to start the station</h1>
+      <div class="np-meta" id="np-meta"></div>
+    </div>
+
+    <div class="transport">
+      <button id="btn-like" class="icon-btn" title="Bookmark"><svg class="bm" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+      <button id="btn-play" class="play-btn" title="Play / pause">
+        <span class="play-icon">▶</span>
+      </button>
+      <button id="btn-skip" class="icon-btn" title="Skip">⏭</button>
+      <a id="btn-download" class="icon-btn" title="Download WAV" download>⤓</a>
+    </div>
+
+    <div class="progress">
+      <span id="t-cur">0:00</span>
+      <input id="seek" type="range" min="0" max="1000" value="0">
+      <span id="t-dur">0:00</span>
+    </div>
+
+    <div class="tune-row">
+      <button id="btn-tune" class="btn btn-primary">Tune in</button>
+      <button id="btn-stop" class="btn btn-ghost" hidden>Go off air</button>
+      <div id="buffering" class="buffering" hidden>
+        <span class="spinner"></span>
+        <span id="buffering-text">Buffering first song…</span>
+      </div>
+    </div>
+
+    <div class="lyrics-wrap">
+      <h3>Lyrics</h3>
+      <pre id="lyrics" class="lyrics">—</pre>
+    </div>
+    <audio id="audio" preload="auto"></audio>
+  </section>
+
+  <!-- Queue / Library -->
+  <aside class="panel side">
+    <div class="tabs">
+      <button class="tab active" data-tab="queue">Up next</button>
+      <button class="tab" data-tab="library">Library</button>
+      <button class="tab" data-tab="engine">Engine</button>
+    </div>
+
+    <div id="tab-queue" class="tab-body">
+      <div id="gen-card" class="gen-card" hidden>
+        <div class="gen-head">
+          <span class="spinner small"></span>
+          <span id="gen-title">Generating…</span>
+        </div>
+        <div class="gen-phase" id="gen-phase"></div>
+        <div class="gen-bar"><div id="gen-fill"></div></div>
+        <div class="gen-foot"><span id="gen-elapsed">0s</span><span id="gen-eta"></span></div>
+      </div>
+      <ul id="queue" class="track-list"></ul>
+      <p id="queue-empty" class="hint">No songs ready yet.</p>
+      <div class="speed" id="speed"></div>
+    </div>
+
+    <div id="tab-library" class="tab-body" hidden>
+      <div class="lib-filter">
+        <label><input type="checkbox" id="lib-liked"> Bookmarked only</label>
+        <span id="lib-count" class="hint"></span>
+      </div>
+      <ul id="library" class="track-list"></ul>
+    </div>
+
+    <div id="tab-engine" class="tab-body" hidden>
+      <dl class="kv" id="engine-kv"></dl>
+      <pre id="engine-log" class="log"></pre>
+      <button id="engine-restart" class="btn btn-ghost">Restart audio.cpp</button>
+    </div>
+  </aside>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

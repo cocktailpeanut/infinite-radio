@@ -1,0 +1,23 @@
+ENVIRONMENT
+node_modules
+venv
+.env
+.*
+~*
+/logs/
+/cache/
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/QWEN.md
+/SPEC.md
+
+# Infinite Radio: created by install.js / at runtime
+/app/env/
+/app/bin/
+/app/models/
+/app/output/
+/app/data/
+/app/runtime.json
+__pycache__/
+*.pyc

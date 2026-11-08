@@ -1,0 +1,5 @@
+{
+  "title": "Infinite Radio",
+  "description": "A never-ending, fully local AI radio station. YuE2 (via audio.cpp) composes and sings new songs back to back from a vibe you describe. Runs on Apple Silicon, NVIDIA, Vulkan GPUs, or CPU.",
+  "icon": "icon.png"
+}
