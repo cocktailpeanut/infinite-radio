@@ -94,6 +94,13 @@ module.exports = {
         dir: "app/bin"
       }
     },
+    // ---- ffmpeg for episode rendering (Pinokio's conda base usually ships it; make it explicit) ----
+    {
+      method: "shell.run",
+      params: {
+        message: "conda install -y -c conda-forge ffmpeg"
+      }
+    },
     // ---- web app dependencies ----
     {
       method: "shell.run",

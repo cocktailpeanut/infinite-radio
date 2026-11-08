@@ -22,6 +22,12 @@ songs back to back while you listen. No cloud APIs, no accounts, no telemetry.
   delete songs from the Library tab.
 - **Dark neon player.** Generated album art per song, live waveform visualizer,
   keyboard shortcuts (space = play/pause, `n` or → = skip, `b` = bookmark).
+- **DJ sets.** Press **Start a set** and everything that plays through joins the set;
+  skip to cut a song, save the station to open a new section, request a track as a
+  guest spot. Close the set, tidy the tracklist, and render it.
+- **Episodes.** Any set or library selection becomes a YouTube-ready folder: a 1080p
+  MP4 with crossfaded audio, your scene image or loop as the visual, title cards per
+  song, a thumbnail PNG, and a description with chapter timestamps.
 - **Cross-platform, hardware aware.** The installer picks the right audio.cpp build:
   Apple Metal on macOS, CUDA on NVIDIA (Windows/Linux), Vulkan on other GPUs,
   and CPU as a fallback.
@@ -72,15 +78,55 @@ infinite_radio/
 │   ├── radio.py         # station scheduler, lookahead queue, library
 │   ├── engine.py        # supervises audiocpp_server, runs generations
 │   ├── lyrics.py        # offline lyric writer
+│   ├── sets.py          # DJ set state (kept, cut, sections)
+│   ├── mixer.py         # crossfade mixer with exact chapter times
+│   ├── scene.py         # image/GIF/video -> seamless 1080p loop
+│   ├── episodes.py      # render jobs: cards, ffmpeg pass, outputs
 │   ├── static/          # dark neon web UI
 │   ├── tools/extract_bin.py
 │   ├── bin/             # audio.cpp release (downloaded)
 │   ├── models/Yue2-3B-GGUF/  # YuE2 GGUF package (downloaded)
-│   ├── output/          # generated WAV files
+│   ├── output/          # generated WAV files, episodes/<name>/ folders
 │   └── data/            # station.json, library.json, server config
 ├── install.js  start.js  update.js  reset.js  pinokio.js  pinokio.json
 └── README.md
 ```
+
+## Sets, scenes and episodes
+
+**Start a set** from the player. While it is open, the set bar shows a clock, songs
+kept and songs cut. Skip (⏭ or `n`) cuts the current song from the set and plays the
+next; a toast offers Undo. Saving the station mid-set records a new section so you
+can shape an arc from mellow to energetic. **Close set** opens the tracklist: reorder,
+remove, rename, choose a crossfade, then **Render episode**.
+
+**Build from library** (Episodes tab) suggests a tracklist from bookmarked or recent
+songs for a target length, or use **Select** in the Library to pick songs by hand.
+
+**Scene** is the picture behind every episode. Drop in one file:
+
+| You provide | What happens |
+|---|---|
+| JPG, PNG, WebP | Slow camera drift, weather (rain, snow, leaves, dust), fog, lamp flicker, grain and vignette are rendered on top as a seamless loop |
+| GIF, MP4, WebM, MOV loop | Fitted to 16:9, frame rate normalized, embedded audio dropped, optional ping-pong; grain and vignette available |
+| nothing | A mood-colored title card |
+
+Each episode lands in `app/output/episodes/<name>/`:
+
+```
+episode.mp4        1080p30 H.264 + AAC, crossfaded mix, intro card, per-song title cards
+thumbnail.png      1280x720 frame with the episode title
+description.txt    title, chapter timestamps (0:00 first), credits, AI disclosure, license note
+tracklist.json     songs with exact start times and durations
+```
+
+Upload is manual: drag `episode.mp4` into YouTube Studio, paste `description.txt`
+(YouTube turns the timestamps into chapters when there are at least three), and upload
+`thumbnail.png`. There is no YouTube API integration by design.
+
+A 24-second scene loop renders once per scene (about two minutes on an M1 Max) and is
+cached; encoding runs at roughly 4 to 6 times realtime, so an hour-long episode takes
+10 to 15 minutes.
 
 ## How it works
 
@@ -120,6 +166,19 @@ Base URL: the address shown in the Pinokio terminal (for example
 | DELETE | `/api/tracks/{id}` | Delete a song and its WAV |
 | GET | `/api/presets` | Style presets and moods |
 | GET | `/api/engine/log`, POST `/api/engine/restart` | audio.cpp log tail / restart |
+| POST | `/api/sets/start` `{name}` | Open a DJ set (turns the station on) |
+| POST | `/api/sets/cut` `{track_id?}`, `/api/sets/undo`, `/api/sets/close` | Cut the playing song, undo the last cut, close the set |
+| GET | `/api/sets`, `/api/sets/current`, `/api/sets/{id}` | List sets, the open set, one set with its tracklist |
+| PUT | `/api/sets/{id}` `{name, tracks:[{track_id, display_title}]}` | Reorder, remove or rename kept songs |
+| POST | `/api/sets/{id}/render` `{crossfade}` | Render a closed set as an episode |
+| POST | `/api/player/ended` `{track_id}` | Tell an open set a song played through (the web player does this) |
+| GET | `/api/episodes/suggest?source=bookmarked\|recent&minutes=60&order=chronological\|shuffled` | Suggested tracklist from the library |
+| POST | `/api/episodes` `{name, tracks:[{track_id, display_title}], crossfade}` | Render a custom tracklist |
+| GET | `/api/episodes`, `/api/episodes/{id}` | Render jobs with status, step and progress |
+| GET | `/api/episodes/{id}/file`, `/thumbnail`, `/description` | Outputs (`?download=1` for attachments) |
+| POST | `/api/episodes/{id}/cancel`, DELETE `/api/episodes/{id}` | Cancel a render, delete an episode and its files |
+| GET | `/api/scene`, PUT `/api/scene` | Scene settings (`camera`, `weather`, `weather_density`, `fog`, `flicker`, `grain`, `vignette`, `pingpong`, `loop_seconds`) |
+| POST | `/api/scene/upload` (multipart `file`), DELETE `/api/scene`, GET `/api/scene/preview` | Set, clear or view the scene file |
 
 ### curl
 
@@ -134,6 +193,13 @@ curl -X POST $BASE/api/station/on
 # queue your own lyrics
 curl -X POST $BASE/api/requests -H 'Content-Type: application/json' \
   -d '{"title":"Harbor Lights","lyrics":"[Verse]\nMorning sunlight fills the sky.\n[Chorus]\nSing together, you and I."}'
+
+# render an episode from the two newest songs and poll until it is done
+IDS=$(curl -s "$BASE/api/library?limit=2" | jq -c '[.tracks[] | {track_id: .id}]')
+JOB=$(curl -s -X POST $BASE/api/episodes -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Late Night Mix\",\"tracks\":$IDS,\"crossfade\":2}" | jq -r .id)
+until [ "$(curl -s $BASE/api/episodes/$JOB | jq -r .status)" = "done" ]; do sleep 5; done
+curl -o episode.mp4 "$BASE/api/episodes/$JOB/file"
 
 # wait for a song, then fetch it
 curl $BASE/api/status | jq '.current, .ready[].title'
@@ -192,6 +258,7 @@ cd app
 python -m venv env && . env/bin/activate      # Windows: env\Scripts\activate
 pip install -r requirements.txt
 # put an audio.cpp release in app/bin and the YuE2 GGUF package in app/models/Yue2-3B-GGUF
+# ffmpeg must be on PATH for episode rendering
 python tools/extract_bin.py --version v0.9.4
 python server.py
 ```
