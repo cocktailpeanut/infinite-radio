@@ -205,7 +205,7 @@
     const e = st.engine;
     const pill = $("engine-pill");
     pill.textContent = `${e.hardware} · ${e.state}`;
-    pill.className = "pill pill-engine " + (e.state === "ready" ? "ready" : e.state === "error" ? "error" : "busy");
+    pill.className = "status " + (e.state === "ready" ? "ready" : e.state === "error" ? "error" : "busy");
     pill.title = e.message || "";
     if (state.activeTab === "engine") {
       const kv = [
@@ -246,8 +246,8 @@
       const st = await api("/api/status");
       state.status = st;
       state.lastStatusAt = Date.now();
-      $("onair").textContent = st.on ? "ON AIR" : "OFF AIR";
-      $("onair").className = "pill " + (st.on ? "pill-on" : "pill-off");
+      $("onair").textContent = st.on ? "On air" : "Off air";
+      $("onair").className = "status " + (st.on ? "on" : "off");
       // "Tune in" is about this browser listening; "Go off air" is about the generator.
       $("btn-tune").hidden = state.listening;
       $("btn-tune").textContent = st.on && !state.listening ? "Tune in (station is on air)" : "Tune in";
@@ -271,7 +271,7 @@
       }
     } catch (e) {
       $("engine-pill").textContent = "server unreachable";
-      $("engine-pill").className = "pill pill-engine error";
+      $("engine-pill").className = "status error";
     }
   };
 
