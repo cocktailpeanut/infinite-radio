@@ -318,7 +318,7 @@
         <div class="ops"><button data-act="up" title="Move up">↑</button><button data-act="down" title="Move down">↓</button><button data-act="remove" title="Remove">✕</button></div>
       </li>`).join("") || `<li class="hint">No songs left. Add some from the Library or discard.</li>`;
     const total = ed.tracks.reduce((a, t) => a + (t.duration || 0), 0) - Math.max(0, ed.tracks.length - 1) * Number($("ed-xf").value);
-    $("ed-total").textContent = `${ed.tracks.length} songs · about ${fmt(total)}`;
+    $("ed-total").textContent = `${ed.tracks.length} song${ed.tracks.length === 1 ? "" : "s"} · about ${fmt(total)}`;
     $("ed-render").disabled = ed.tracks.filter((t) => t.available !== false).length === 0;
   };
   $("ed-list").onclick = (ev) => {
