@@ -114,6 +114,31 @@
       <div class="stage-empty" id="stage-empty">Add a scene to see your set the way the episode will look.</div>
     </div>
 
+    <div id="setup" class="setup" hidden>
+      <div class="setup-grid">
+        <label class="field"><span>Set name</span><input id="su-name" type="text" autocomplete="off"></label>
+        <label class="field"><span>Planned length</span>
+          <select id="su-length"><option value="0">Open-ended</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option><option value="90">90 min</option><option value="120">2 hours</option></select>
+        </label>
+      </div>
+      <div class="setup-line">
+        <span class="k">Scene</span>
+        <span id="su-scene">—</span>
+        <label class="linkish file-btn">Change image or loop<input id="su-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,image/gif" hidden></label>
+        <button id="su-scene-clear" class="linkish" hidden>Remove</button>
+      </div>
+      <div class="setup-line">
+        <span class="k">Opening section</span>
+        <span id="su-vibe">—</span>
+        <button id="su-edit" class="linkish">Edit in Station</button>
+      </div>
+      <p class="hint">Your station settings become the first section. Save the station during the set to start a new section; skip cuts a song from the set.</p>
+      <div class="setup-actions">
+        <button id="su-cancel" class="linkish">Cancel</button>
+        <button id="su-start" class="btn btn-primary">Start set</button>
+      </div>
+    </div>
+
     <div class="np">
       <div class="np-kicker" id="np-kicker">Nothing playing</div>
       <h1 id="np-title">Tune in to start the station</h1>
@@ -148,7 +173,7 @@
     <div id="setbar" class="setbar" hidden>
       <span class="rec-dot"></span>
       <span class="setbar-name" id="setbar-name">Set</span>
-      <span class="setbar-meta"><span id="setbar-clock">00:00</span> · <span id="setbar-kept">0 kept</span> · <span id="setbar-cut">0 cut</span></span>
+      <span class="setbar-meta"><span id="setbar-clock">00:00</span><span id="setbar-plan"></span> · <span id="setbar-kept">0 kept</span> · <span id="setbar-cut">0 cut</span></span>
       <span class="setbar-hint">Skip = cut from the set · Save station = new section</span>
       <button id="btn-set-close" class="btn btn-ghost small">Close set</button>
     </div>
@@ -269,24 +294,6 @@
   </aside>
 </main>
 
-<div id="set-dialog" class="dialog" hidden>
-  <div class="dialog-card">
-    <h3>Start a set</h3>
-    <p class="hint">Everything that plays through joins the set. Skip cuts a song. Close the set when you're done and render it as an episode.</p>
-    <label class="field"><span>Set name</span><input id="sd-name" type="text"></label>
-    <div class="sd-scene">
-      <div id="sd-preview" class="scene-preview"><span class="hint">No scene yet</span></div>
-      <div class="scene-actions">
-        <span class="hint" id="sd-scene-note">The scene is the picture behind the episode and what the player shows during the set.</span>
-        <label class="btn btn-ghost small file-btn">Change image or loop<input id="sd-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,image/gif" hidden></label>
-      </div>
-    </div>
-    <div class="dialog-actions">
-      <button id="sd-cancel" class="linkish">Cancel</button>
-      <button id="sd-start" class="btn btn-primary small">Start set</button>
-    </div>
-  </div>
-</div>
 <div id="toast" class="toast" hidden><span id="toast-text"></span><button id="toast-action" class="linkish" hidden></button></div>
 <script src="/static/app.js"></script>
 </body>

@@ -23,6 +23,7 @@
     episodes: [],
     sets: [],
     editor: null,       // {kind: 'set'|'custom', setId, name, tracks:[{track_id, display_title, duration, style, available}]}
+    setup: false,       // inline set setup open
   };
 
   // ---------- helpers ----------
@@ -215,7 +216,7 @@
   // ---------- DJ set ----------
   const renderSetBar = () => {
     const s = state.set, bar = $("setbar");
-    $("btn-set-start").hidden = !!s;
+    $("btn-set-start").hidden = !!s || !!state.setup;
     bar.hidden = !s;
     if (!s) return;
     $("setbar-name").textContent = s.name;
@@ -223,36 +224,60 @@
     $("setbar-cut").textContent = `${s.cut} cut`;
     const el = Math.max(0, Date.now() / 1000 - s.started_at);
     $("setbar-clock").textContent = fmt(el).padStart(5, "0");
+    const plan = Number(s.planned_minutes || 0);
+    $("setbar-plan").textContent = plan ? ` / ${fmt(plan * 60)}${el > plan * 60 ? " · over" : ""}` : "";
   };
   setInterval(() => { if (state.set) renderSetBar(); }, 1000);
 
-  const scenePreviewHtml = (sc) => {
-    if (!sc || sc.kind === "none") return `<span class="hint">No scene yet. A mood-colored title card is used.</span>`;
-    if (sc.kind === "image") return `<img src="/api/scene/preview?${Date.now()}" alt="scene">`;
-    return `<video src="/api/scene/preview?${Date.now()}" muted loop autoplay playsinline></video>`;
+  // ---------- set setup (inline, replaces the old dialog) ----------
+  const describeVibe = (st) => {
+    if (!st) return "—";
+    const vocals = { auto: "auto lyrics", instrumental: "instrumental", "custom-only": "requests only" }[st.lyric_mode] || st.lyric_mode;
+    return `${st.style.split(",").slice(0, 3).map((x) => x.trim()).join(", ")} · ${st.mood} · ${vocals} · ~${fmt(st.target_seconds)} songs${st.themes ? ` · themes: ${st.themes}` : ""}`;
   };
-  const openSetDialog = async () => {
-    $("sd-name").value = `${(state.status?.settings?.name) || "Infinite Radio"} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-    $("set-dialog").hidden = false;
+  const renderSetup = () => {
+    const on = !!state.setup;
+    $("setup").hidden = !on;
+    $("btn-set-start").hidden = on || !!state.set;
+    if (!on) return;
+    const sc = state.scene;
+    $("su-scene").textContent = !sc || sc.kind === "none" ? "none yet (a mood-colored card is used)" : `${sc.kind === "image" ? "image" : "loop"} · ${sc.original_name || sc.file}`;
+    $("su-scene-clear").hidden = !sc || sc.kind === "none";
+    const vibe = $("su-vibe");
+    vibe.textContent = describeVibe(state.status?.settings) + (state.settingsDirty ? "  (unsaved edits in Station — save to use them)" : "");
+    vibe.classList.toggle("unsaved", !!state.settingsDirty);
+  };
+  const openSetup = async () => {
+    state.setup = true;
+    $("su-name").value = `${(state.status?.settings?.name) || "Infinite Radio"} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
     try { if (!state.scene) state.scene = await api("/api/scene"); } catch {}
-    $("sd-preview").innerHTML = scenePreviewHtml(state.scene);
-    $("sd-name").focus();
+    renderSetup(); renderStage(true);
+    $("setup").scrollIntoView({ behavior: "smooth", block: "center" });
   };
-  const startSet = openSetDialog;
-  $("sd-cancel").onclick = () => { $("set-dialog").hidden = true; };
-  $("set-dialog").onclick = (ev) => { if (ev.target === $("set-dialog")) $("set-dialog").hidden = true; };
-  $("sd-file").onchange = async (ev) => {
+  const closeSetup = () => { state.setup = false; renderSetup(); renderStage(true); };
+  const startSet = openSetup;
+  $("su-cancel").onclick = closeSetup;
+  $("su-edit").onclick = () => {
+    const panel = document.querySelector(".station");
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    panel.classList.remove("flash"); void panel.offsetWidth; panel.classList.add("flash");
+    $("f-style").focus({ preventScroll: true });
+  };
+  $("su-file").onchange = async (ev) => {
     const f = ev.target.files[0]; if (!f) return;
     const fd = new FormData(); fd.append("file", f, f.name);
-    try { state.scene = await api("/api/scene/upload", { method: "POST", body: fd }); $("sd-preview").innerHTML = scenePreviewHtml(state.scene); renderScene(); renderStage(true); }
+    try { state.scene = await api("/api/scene/upload", { method: "POST", body: fd }); renderScene(); renderSetup(); renderStage(true); }
     catch (e) { toast(e.message); }
     ev.target.value = "";
   };
-  $("sd-start").onclick = async () => {
-    const name = $("sd-name").value.trim();
+  $("su-scene-clear").onclick = async () => { state.scene = await api("/api/scene", { method: "DELETE" }); renderScene(); renderSetup(); renderStage(true); };
+  $("su-start").onclick = async () => {
+    const name = $("su-name").value.trim();
+    const planned_minutes = Number($("su-length").value);
     try {
-      await api("/api/sets/start", { method: "POST", body: { name } });
-      $("set-dialog").hidden = true;
+      if (state.settingsDirty) await saveSettings();
+      await api("/api/sets/start", { method: "POST", body: { name, planned_minutes } });
+      state.setup = false; renderSetup();
       await refresh();
       if (!state.listening) await tuneIn();
       toast("Set started. Everything that plays through is in; skip to cut.", true);
@@ -272,10 +297,11 @@
   $("btn-set-close").onclick = closeSet;
 
   // ---------- scene ----------
+  const isGif = (sc) => !!sc && sc.kind === "video" && /\.gif$/i.test(sc.file || "");
   const renderScene = () => {
     const sc = state.scene; if (!sc) return;
     const prev = $("scene-preview");
-    if (sc.kind === "image") prev.innerHTML = `<img src="/api/scene/preview?${Date.now()}" alt="scene">`;
+    if (sc.kind === "image" || isGif(sc)) prev.innerHTML = `<img src="/api/scene/preview?${Date.now()}" alt="scene">`;
     else if (sc.kind === "video") prev.innerHTML = `<video src="/api/scene/preview?${Date.now()}" muted loop autoplay playsinline></video>`;
     else prev.innerHTML = `<span class="hint">No scene yet. A mood-colored title card is used.</span>`;
     $("scene-clear").hidden = sc.kind === "none";
@@ -448,7 +474,8 @@
       $("btn-stop").hidden = !st.on;
       const hadSet = !!state.set;
       state.set = st.set;
-      renderSetBar();
+      if (st.set && state.setup) { state.setup = false; }
+      renderSetBar(); renderSetup();
       if (hadSet !== !!st.set) renderNowPlaying();
       renderStage();
       applySettingsToForm(st.settings);
@@ -549,7 +576,7 @@
   };
   $("save").onclick = saveSettings;
   ["f-style", "f-mood", "f-lyric-mode", "f-themes", "f-len", "f-lookahead", "f-planning"].forEach((id) => {
-    $(id).addEventListener("input", () => { state.settingsDirty = true; if (id === "f-len") $("f-len-label").textContent = fmt($("f-len").value); });
+    $(id).addEventListener("input", () => { state.settingsDirty = true; if (id === "f-len") $("f-len-label").textContent = fmt($("f-len").value); if (state.setup) renderSetup(); });
   });
   const loadPresets = async () => {
     const p = await api("/api/presets");
@@ -650,7 +677,7 @@
     }
   };
   const renderStage = (force = false) => {
-    const inSet = !!state.set, stage = $("stage"), wrap = $("art-wrap");
+    const inSet = !!state.set || !!state.setup, stage = $("stage"), wrap = $("art-wrap");
     wrap.hidden = inSet; stage.hidden = !inSet;
     if (!inSet) { fxRunning = false; $("stage-video").pause(); return; }
     $("stage-station").textContent = (state.status?.settings?.name) || "Infinite Radio";
@@ -662,11 +689,17 @@
       const img = $("stage-img"), vid = $("stage-video"), st = sc.settings;
       stage.classList.toggle("has-scene", sc.kind !== "none");
       stage.classList.toggle("grain", !!st.grain);
-      img.hidden = sc.kind !== "image"; vid.hidden = sc.kind !== "video";
+      const gif = isGif(sc);
+      img.hidden = !(sc.kind === "image" || gif); vid.hidden = sc.kind !== "video" || gif;
       if (sc.kind === "image") {
         img.src = `/api/scene/preview?${Date.now()}`;
         img.className = st.camera ? (st.flicker ? "flicker" : "drift") : (st.flicker ? "flicker" : "");
         initFx(st.weather || "none", Number(st.weather_density ?? 0.6));
+      } else if (gif) {
+        img.src = `/api/scene/preview?${Date.now()}`;  // GIFs animate on their own; no CSS drift
+        img.className = "";
+        vid.pause();
+        initFx("none", 0);
       } else {
         initFx("none", 0);
         if (sc.kind === "video") { vid.src = `/api/scene/preview?${Date.now()}`; vid.play().catch(() => {}); }
@@ -674,9 +707,9 @@
       if (!fxRunning) { fxRunning = true; requestAnimationFrame(fxLoop); }
     }
     const t = state.track, card = $("stage-card");
-    card.hidden = !t;
+    card.hidden = !t || !state.set;
     if (t) {
-      $("stage-num").textContent = String((state.set.kept || 0) + 0).padStart(2, "0");
+      $("stage-num").textContent = String(state.set.kept || 0).padStart(2, "0");
       $("stage-title").textContent = t.title;
       $("stage-tags").textContent = t.style.split(",").slice(1, 5).map((x) => x.trim()).filter(Boolean).join(" · ");
     }

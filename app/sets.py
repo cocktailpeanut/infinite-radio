@@ -52,7 +52,7 @@ class SetManager:
         return next((s for s in self.sets if s.get("status") == "open"), None)
 
     # ---------- lifecycle ----------
-    def start(self, name: str, station: dict) -> dict:
+    def start(self, name: str, station: dict, planned_minutes: int = 0) -> dict:
         with self.lock:
             if self._open():
                 raise ValueError("a set is already open")
@@ -68,6 +68,7 @@ class SetManager:
                 "sections": [{"at": time.time(), "style": station.get("style"), "mood": station.get("mood"), "label": "Opening"}],
                 "requests": 0,
                 "episode_id": None,
+                "planned_minutes": int(max(0, min(360, planned_minutes or 0))),
             }
             self.sets.insert(0, s)
             self._save()

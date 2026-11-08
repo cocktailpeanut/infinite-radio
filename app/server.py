@@ -85,6 +85,7 @@ class SongRequest(BaseModel):
 
 class SetStart(BaseModel):
     name: str | None = None
+    planned_minutes: int | None = 0
 
 
 class SetCut(BaseModel):
@@ -148,6 +149,7 @@ def status():
     if cur:
         kept = [e for e in cur["tracks"] if e["state"] in ("kept", "playing")]
         cur = {"id": cur["id"], "name": cur["name"], "started_at": cur["started_at"], "kept": len(kept),
+               "planned_minutes": cur.get("planned_minutes", 0),
                "cut": sum(1 for e in cur["tracks"] if e["state"] == "cut"), "sections": len(cur["sections"]),
                "tracks": cur["tracks"][-12:]}
     st["set"] = cur
@@ -308,7 +310,7 @@ def start_set(body: SetStart):
     if not ok:
         raise HTTPException(409, why)
     try:
-        s = sets.start(body.name or "", radio.settings)
+        s = sets.start(body.name or "", radio.settings, body.planned_minutes or 0)
     except ValueError as e:
         raise HTTPException(409, str(e))
     radio.set_on(True)
