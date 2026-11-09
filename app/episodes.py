@@ -16,7 +16,8 @@ from PIL import Image, ImageDraw
 
 from engine import APP_DIR
 from mixer import format_timestamp, mix_tracks
-from scene import FPS, H, W, Scene, find_ffmpeg, load_font
+from scene import FPS, H, W, MOOD_PALETTES, Scene, find_ffmpeg
+from typo import accent_from_palette, intro_overlay, lockup, now_playing_card, poster
 
 DATA_DIR = APP_DIR / "data"
 OUTPUT_DIR = APP_DIR / "output"
@@ -242,6 +243,10 @@ class EpisodeRenderer:
     CARD_W = W - 144
     CARD_Y = H - 232
 
+    @staticmethod
+    def _accent(job: dict) -> tuple[int, int, int]:
+        return accent_from_palette(MOOD_PALETTES.get(job.get("mood", "dreamy"), MOOD_PALETTES["dreamy"]))
+
     def _render_cards(self, job: dict, tracks: list[dict], total: float, work: Path) -> dict:
         """Draw the intro card, the lockup, and one VFR card sequence for all songs.
 
@@ -251,7 +256,7 @@ class EpisodeRenderer:
         in an ffconcat file with explicit durations, so ffmpeg decodes a new
         image only when the picture actually changes.
         """
-        f_kicker, f_title, f_sub = load_font(26), load_font(54), load_font(26)
+        accent = self._accent(job)
         n = len(tracks)
         cards_dir = work / "cards"
         cards_dir.mkdir(exist_ok=True)
@@ -278,16 +283,8 @@ class EpisodeRenderer:
             return out
 
         for i, t in enumerate(tracks):
-            base = Image.new("RGBA", (self.CARD_W, self.CARD_H), (0, 0, 0, 0))
-            d = ImageDraw.Draw(base)
-            title = t["title"]
-            tw = d.textlength(title, font=f_title)
-            tags = ", ".join([x.strip() for x in t.get("style", "").split(",")[1:5] if x.strip()])
-            box_w = int(max(560, min(self.CARD_W, max(tw, d.textlength(tags, font=f_sub)) + 72)))
-            d.rounded_rectangle([0, 0, box_w, self.CARD_H], radius=16, fill=(8, 8, 16, 165))
-            d.text((32, 24), f"NOW PLAYING  ·  {i + 1:02d} / {n:02d}", font=f_kicker, fill=(34, 211, 238, 255))
-            d.text((32, 58), title, font=f_title, fill=(245, 245, 250, 255))
-            d.text((32, 120), tags[:90], font=f_sub, fill=(176, 178, 196, 255))
+            tags = " · ".join([x.strip() for x in t.get("style", "").split(",")[1:5] if x.strip()])
+            base = now_playing_card(self.CARD_W, self.CARD_H, i + 1, n, t["title"], tags, accent)
             start = t["start"] if i else INTRO_SECONDS
             end = tracks[i + 1]["start"] if i + 1 < n else total
             if end - start <= 2.0:
@@ -315,26 +312,13 @@ class EpisodeRenderer:
         concat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         # Intro: set name large, first seconds (also what YouTube tends to pick as a thumbnail)
-        intro = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        d = ImageDraw.Draw(intro)
-        d.rectangle([0, 0, W, H], fill=(5, 5, 12, 110))
-        f_big, f_small = load_font(110), load_font(34)
-        name = job["name"]
-        tw = d.textlength(name, font=f_big)
-        d.text(((W - tw) / 2, H / 2 - 110), name, font=f_big, fill=(248, 248, 252, 255))
-        sub = f"{job['station']}  ·  {_plural(n, 'song')}  ·  {format_timestamp(total)}"
-        sw = d.textlength(sub, font=f_small)
-        d.text(((W - sw) / 2, H / 2 + 30), sub, font=f_small, fill=(190, 192, 210, 255))
+        intro = intro_overlay(W, H, job["name"], n, format_timestamp(total), job["station"], accent)
         intro_path = work / "intro.png"
         intro.save(intro_path)
 
         # Lockup: small brand image, placed top-right by the overlay
-        f_lock = load_font(24)
-        text = f"INFINITE RADIO  ·  {job['station']}"
-        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-        lw = int(probe.textlength(text, font=f_lock)) + 8
-        lock = Image.new("RGBA", (max(lw, 8), 40), (0, 0, 0, 0))
-        ImageDraw.Draw(lock).text((4, 4), text, font=f_lock, fill=(230, 230, 240, 215))
+        lock = lockup(job["station"])
+        lw = lock.width
         lock_path = work / "lockup.png"
         lock.save(lock_path)
         return {"intro": intro_path, "lockup": lock_path, "cards": concat_path, "lockup_x": W - lw - 64, "lockup_y": 44}
@@ -418,33 +402,9 @@ class EpisodeRenderer:
                              capture_output=True, encoding="utf-8", errors="replace")
         if res.returncode != 0 or not frame.exists():
             return None
-        img = Image.open(frame).convert("RGBA").resize((1280, 720), Image.LANCZOS)
-        shade = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        d = ImageDraw.Draw(shade)
-        d.rectangle([0, 0, 1280, 720], fill=(5, 5, 12, 95))
-        img = Image.alpha_composite(img, shade)
-        d = ImageDraw.Draw(img)
-        f_big, f_small = load_font(84), load_font(28)
-        name = job["name"]
-        # Wrap long names onto two lines
-        words, lines, cur = name.split(), [], ""
-        for w_ in words:
-            trial = (cur + " " + w_).strip()
-            if d.textlength(trial, font=f_big) > 1120 and cur:
-                lines.append(cur)
-                cur = w_
-            else:
-                cur = trial
-        lines.append(cur)
-        y = 360 - 48 * len(lines)
-        for ln in lines[:3]:
-            tw = d.textlength(ln, font=f_big)
-            d.text(((1280 - tw) / 2, y), ln, font=f_big, fill=(248, 248, 252, 255))
-            y += 96
-        sub = f"{_plural(len(job['tracks']), 'song')}  ·  {format_timestamp(job['duration'] or 0)}  ·  {job['station']}"
-        sw = d.textlength(sub, font=f_small)
-        d.text(((1280 - sw) / 2, y + 10), sub, font=f_small, fill=(200, 202, 220, 255))
-        img.convert("RGB").save(out, "PNG")
+        img = poster(Image.open(frame), job["name"], len(job["tracks"]), format_timestamp(job["duration"] or 0),
+                     job["station"], self._accent(job))
+        img.save(out, "PNG")
         frame.unlink(missing_ok=True)
         return out
 
