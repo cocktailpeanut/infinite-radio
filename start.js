@@ -6,6 +6,10 @@ module.exports = {
       params: {
         venv: "env",
         path: "app",
+        env: {
+          PYTHONUTF8: "1",
+          PYTHONIOENCODING: "utf-8"
+        },
         message: [
           "python server.py",
         ],

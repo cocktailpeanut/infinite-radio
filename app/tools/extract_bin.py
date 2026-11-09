@@ -57,7 +57,7 @@ def main() -> int:
     runtime = {}
     if RUNTIME_FILE.exists():
         try:
-            runtime = json.loads(RUNTIME_FILE.read_text())
+            runtime = json.loads(RUNTIME_FILE.read_text(encoding="utf-8"))
         except Exception:
             runtime = {}
     if not archives:
@@ -110,7 +110,7 @@ def main() -> int:
     if args.version:
         runtime["version"] = args.version
     runtime["server"] = str(hits[0].relative_to(APP_DIR))
-    RUNTIME_FILE.write_text(json.dumps(runtime, indent=2))
+    RUNTIME_FILE.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
     print(f"audio.cpp server: {hits[0]}")
     print(f"runtime: {json.dumps(runtime)}")
     return 0

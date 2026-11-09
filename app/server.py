@@ -22,6 +22,13 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# Windows consoles default to the ANSI code page; song titles and lyrics are often CJK.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from engine import AudioCppEngine, EngineError  # noqa: E402
 from episodes import EpisodeRenderer  # noqa: E402
 from lyricwriter import LANGUAGES, TIER_LABEL  # noqa: E402

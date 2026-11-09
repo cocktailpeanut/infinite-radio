@@ -83,7 +83,7 @@ class AudioCppEngine:
         p = APP_DIR / "runtime.json"
         if p.exists():
             try:
-                return json.loads(p.read_text())
+                return json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 return {}
         return {}
@@ -165,7 +165,7 @@ class AudioCppEngine:
             ],
         }
         path = DATA_DIR / "audiocpp-server.json"
-        path.write_text(json.dumps(cfg, indent=2))
+        path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         return path
 
     def start(self) -> None:
@@ -193,7 +193,7 @@ class AudioCppEngine:
         self._log(f"$ {' '.join(cmd)}")
         self.proc = subprocess.Popen(
             cmd, cwd=bin_dir, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8",
             errors="replace", bufsize=1,
         )
         self._reader = threading.Thread(target=self._pump, daemon=True)

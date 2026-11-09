@@ -108,7 +108,7 @@ class Scene:
         self.state = {"kind": "none", "file": None, "original_name": None, "settings": dict(DEFAULT_SETTINGS)}
         if SETTINGS_FILE.exists():
             try:
-                saved = json.loads(SETTINGS_FILE.read_text())
+                saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
                 self.state.update({k: saved[k] for k in ("kind", "file", "original_name") if k in saved})
                 self.state["settings"].update(saved.get("settings", {}))
             except Exception:
@@ -117,7 +117,7 @@ class Scene:
             self.state.update({"kind": "none", "file": None, "original_name": None})
 
     def _save(self) -> None:
-        SETTINGS_FILE.write_text(json.dumps(self.state, indent=2))
+        SETTINGS_FILE.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -205,7 +205,7 @@ class Scene:
         meta = CACHE_DIR / f"loop-{key}.json"
         if out.exists() and meta.exists():
             try:
-                return out, float(json.loads(meta.read_text())["seconds"])
+                return out, float(json.loads(meta.read_text(encoding="utf-8"))["seconds"])
             except Exception:
                 pass
         with self.lock:
@@ -223,7 +223,7 @@ class Scene:
         else:
             base = Image.open(SCENE_DIR / file).convert("RGB") if kind == "image" else _fallback_card(mood, title)
             seconds = render_motion_loop(base, out, settings, mood, progress)
-        meta.write_text(json.dumps({"seconds": seconds}))
+        meta.write_text(json.dumps({"seconds": seconds}), encoding="utf-8")
         return out, seconds
 
 
@@ -401,7 +401,7 @@ def _probe_duration(ffmpeg: str, path: Path) -> float:
     ffprobe = str(Path(ffmpeg).with_name(Path(ffmpeg).name.replace("ffmpeg", "ffprobe")))
     try:
         res = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, encoding="utf-8", errors="replace", timeout=30)
         return float(res.stdout.strip())
     except Exception:
         return 0.0
@@ -426,7 +426,7 @@ def _normalize_video_loop(src: Path, out: Path, settings: dict, progress=None) -
         cmd += ["-ignore_loop", "0", "-t", "60"]  # stop an infinite GIF after one minute of material
     cmd += ["-i", str(src), "-filter_complex", filt, "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-movflags", "+faststart", str(out)]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")
     if res.returncode != 0:
         raise RuntimeError(f"ffmpeg failed to prepare the loop: {res.stderr[-400:]}")
     if progress:

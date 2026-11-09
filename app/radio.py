@@ -76,13 +76,13 @@ class Library:
         self.tracks: list[dict] = []
         if LIBRARY_FILE.exists():
             try:
-                self.tracks = json.loads(LIBRARY_FILE.read_text())
+                self.tracks = json.loads(LIBRARY_FILE.read_text(encoding="utf-8"))
             except Exception:
                 self.tracks = []
 
     def _save(self) -> None:
         tmp = LIBRARY_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.tracks, indent=2))
+        tmp.write_text(json.dumps(self.tracks, indent=2), encoding="utf-8")
         tmp.replace(LIBRARY_FILE)
 
     def add(self, track: dict) -> None:
@@ -133,7 +133,7 @@ class Radio:
         self.settings = dict(DEFAULT_STATION)
         if STATION_FILE.exists():
             try:
-                self.settings.update(json.loads(STATION_FILE.read_text()))
+                self.settings.update(json.loads(STATION_FILE.read_text(encoding="utf-8")))
             except Exception:
                 pass
         # Songs generated but not yet handed to a player. Unplayed songs from a
@@ -178,7 +178,7 @@ class Radio:
                 if k == "language" and v not in {n for n, _ in LANGUAGES}:
                     continue
                 self.settings[k] = v
-            STATION_FILE.write_text(json.dumps(self.settings, indent=2))
+            STATION_FILE.write_text(json.dumps(self.settings, indent=2), encoding="utf-8")
             snapshot = dict(self.settings)
         self._wake.set()
         self._prefetch_wake.set()

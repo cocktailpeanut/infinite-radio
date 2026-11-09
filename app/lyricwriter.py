@@ -157,7 +157,7 @@ class LyricWriter:
         runtime = APP_DIR / "runtime.json"
         if runtime.exists():
             try:
-                rel = json.loads(runtime.read_text()).get("llama")
+                rel = json.loads(runtime.read_text(encoding="utf-8")).get("llama")
                 if rel and (APP_DIR / rel).exists():
                     return APP_DIR / rel
             except Exception:
@@ -232,8 +232,9 @@ class LyricWriter:
             env["LD_LIBRARY_PATH"] = bin_dir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         elif sys.platform == "darwin":
             env["DYLD_LIBRARY_PATH"] = bin_dir + os.pathsep + env.get("DYLD_LIBRARY_PATH", "")
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=180, cwd=bin_dir, env=env, errors="replace",
-                             stdin=subprocess.DEVNULL)
+        # Always decode as UTF-8: on Windows the default is the ANSI code page, which garbles CJK lyrics.
+        res = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", timeout=180, cwd=bin_dir,
+                             env=env, stdin=subprocess.DEVNULL)
         if res.returncode != 0 and "{" not in res.stdout:
             raise RuntimeError(f"llama exited {res.returncode}: {res.stderr[-300:]}")
         return res.stdout

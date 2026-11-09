@@ -46,7 +46,7 @@ class EpisodeRenderer:
         self.jobs: list[dict] = []
         if JOBS_FILE.exists():
             try:
-                self.jobs = json.loads(JOBS_FILE.read_text())
+                self.jobs = json.loads(JOBS_FILE.read_text(encoding="utf-8"))
             except Exception:
                 self.jobs = []
         for j in self.jobs:
@@ -62,7 +62,7 @@ class EpisodeRenderer:
     # ---------- persistence ----------
     def _save(self) -> None:
         tmp = JOBS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.jobs, indent=2))
+        tmp.write_text(json.dumps(self.jobs, indent=2), encoding="utf-8")
         tmp.replace(JOBS_FILE)
 
     def _update(self, job_id: str, **fields) -> None:
@@ -351,7 +351,7 @@ class EpisodeRenderer:
         chosen = software
         if allow_hw:
             try:
-                listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30).stdout
+                listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, encoding="utf-8", errors="replace", timeout=30).stdout
             except Exception:
                 listing = ""
             candidates = [
@@ -365,7 +365,7 @@ class EpisodeRenderer:
                     continue
                 # Probe: encode a few frames so a listed-but-unusable encoder falls through.
                 probe = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30", "-t", "0.5",
-                                        *args, "-f", "null", "-"], capture_output=True, text=True, timeout=60)
+                                        *args, "-f", "null", "-"], capture_output=True, encoding="utf-8", errors="replace", timeout=60)
                 if probe.returncode == 0:
                     chosen = args
                     print(f"[episodes] using hardware encoder {name}", flush=True)
@@ -391,7 +391,7 @@ class EpisodeRenderer:
                f"[v2][lock]overlay={cards['lockup_x']}:{cards['lockup_y']}:eof_action=repeat,format=yuv420p[vout]",
                "-map", "[vout]", "-map", "1:a", "-t", f"{total:.3f}", "-r", str(FPS),
                *enc, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
         self._proc = proc
         try:
             for line in proc.stdout:
@@ -415,7 +415,7 @@ class EpisodeRenderer:
     def _thumbnail(self, ffmpeg: str, job: dict, loop: Path, out: Path) -> Path | None:
         frame = out.with_name("_frame.png")
         res = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-ss", "2", "-i", str(loop), "-frames:v", "1", str(frame)],
-                             capture_output=True, text=True)
+                             capture_output=True, encoding="utf-8", errors="replace")
         if res.returncode != 0 or not frame.exists():
             return None
         img = Image.open(frame).convert("RGBA").resize((1280, 720), Image.LANCZOS)

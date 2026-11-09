@@ -32,7 +32,7 @@ class SetManager:
         self.sets: list[dict] = []
         if SETS_FILE.exists():
             try:
-                self.sets = json.loads(SETS_FILE.read_text())
+                self.sets = json.loads(SETS_FILE.read_text(encoding="utf-8"))
             except Exception:
                 self.sets = []
         # A set left open by a crash is closed on startup.
@@ -45,7 +45,7 @@ class SetManager:
     # ---------- persistence ----------
     def _save(self) -> None:
         tmp = SETS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.sets, indent=2))
+        tmp.write_text(json.dumps(self.sets, indent=2), encoding="utf-8")
         tmp.replace(SETS_FILE)
 
     def _open(self) -> dict | None:
