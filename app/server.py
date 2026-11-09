@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from engine import AudioCppEngine, EngineError  # noqa: E402
 from episodes import EpisodeRenderer  # noqa: E402
+from lyricwriter import LANGUAGES, TIER_LABEL  # noqa: E402
 from radio import MOODS, PRESETS, Library, Radio  # noqa: E402
 from scene import Scene  # noqa: E402
 from sets import SetManager  # noqa: E402
@@ -45,6 +46,14 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Infinite Radio", version="1.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Keep Spotlight from indexing gigabytes of generated media and model files (macOS; harmless elsewhere).
+for _d in (APP_DIR / "output", APP_DIR / "models", APP_DIR / "data", APP_DIR / "bin"):
+    try:
+        _d.mkdir(parents=True, exist_ok=True)
+        (_d / ".metadata_never_index").touch(exist_ok=True)
+    except OSError:
+        pass
 
 engine = AudioCppEngine()
 library = Library()
@@ -75,6 +84,7 @@ class StationPatch(BaseModel):
     planning: bool | None = None
     lookahead: int | None = None
     quality_steps: int | None = None
+    language: str | None = None
 
 
 class SongRequest(BaseModel):
@@ -161,7 +171,8 @@ def status():
 
 @app.get("/api/presets")
 def presets():
-    return {"presets": PRESETS, "moods": MOODS}
+    return {"presets": PRESETS, "moods": MOODS,
+            "languages": [{"name": n, "tier": t, "label": TIER_LABEL[t]} for n, t in LANGUAGES]}
 
 
 @app.get("/api/engine/log")

@@ -220,7 +220,10 @@ class AudioCppEngine:
             self.state = "error"
             self.message = f"audio.cpp server exited (code {code})"
 
-    NOISY = ("SERVER_HTTP_DEBUG", "[TRACE ", "http.headers", "http.body_ready")
+    NOISY = ("SERVER_HTTP_DEBUG", "[TRACE ", "http.headers", "http.body_ready", "compile_pipeline", "ggml_metal_library")
+    # Only stage boundaries and problems reach the terminal; Pinokio rebuilds terminal state per chunk,
+    # so relaying every timing line costs real CPU on the host.
+    RELAY = ("semantic_ms", "nar_ms", "vae_decode_ms", "session.wall_ms", "listening on", "exited", "error", "failed", "Error")
 
     def _log(self, line: str) -> None:
         if any(tag in line for tag in self.NOISY):
@@ -229,6 +232,10 @@ class AudioCppEngine:
         # "http://host:port" printed, which must be this app's own address.
         line = line.replace("http://", "").replace("https://", "")
         self.log.append(line)
+        if "[TIMING" in line and not any(k in line for k in self.RELAY):
+            return
+        if "[TIMING" not in line and not any(k in line for k in self.RELAY):
+            return
         print(f"[audiocpp] {line}", flush=True)
 
     def _wait_health(self, timeout: float = 90.0) -> None:

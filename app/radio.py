@@ -12,6 +12,7 @@ from pathlib import Path
 
 from engine import APP_DIR, AudioCppEngine, EngineError
 from lyrics import LyricGenerator, instrumental_title
+from lyricwriter import LANGUAGES, LyricWriter, Written, apply_language
 
 DATA_DIR = APP_DIR / "data"
 OUTPUT_DIR = APP_DIR / "output"
@@ -30,6 +31,7 @@ DEFAULT_STATION = {
     "planning": False,  # cot=full when true
     "lookahead": 2,
     "quality_steps": 8,
+    "language": "English",
 }
 
 PRESETS = [
@@ -146,9 +148,15 @@ class Radio:
         self.rtf_history: list[float] = []
         self.songs_generated = 0
         self.rng = random.Random()
+        self.writer = LyricWriter()
+        self.gpu_lock = threading.Lock()  # YuE2 generation and the lyric model never run at the same time
+        self.lyric_cache: list[tuple[str, Written]] = []  # (settings signature, lyrics)
+        self.lyric_mode_used = "template"
         self._wake = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        self._prefetch_wake = threading.Event()
+        threading.Thread(target=self._prefetch_loop, daemon=True).start()
 
     # ---------- settings ----------
     def update_settings(self, patch: dict) -> dict:
@@ -167,16 +175,20 @@ class Radio:
                     continue
                 if k == "lyric_mode" and v not in ("auto", "instrumental", "custom-only"):
                     continue
+                if k == "language" and v not in {n for n, _ in LANGUAGES}:
+                    continue
                 self.settings[k] = v
             STATION_FILE.write_text(json.dumps(self.settings, indent=2))
             snapshot = dict(self.settings)
         self._wake.set()
+        self._prefetch_wake.set()
         return snapshot
 
     def set_on(self, on: bool) -> None:
         with self.lock:
             self.on = on
         self._wake.set()
+        self._prefetch_wake.set()
 
     def add_request(self, lyrics: str, style: str | None, title: str | None) -> dict:
         req = {
@@ -243,6 +255,13 @@ class Radio:
             "requests": requests,
             "current": current,
             "errors": errors,
+            "lyrics": {
+                "writer": "llm" if self.writer.available() else "template",
+                "last_mode": self.lyric_mode_used,
+                "ready": len(self.lyric_cache),
+                "language": settings.get("language", "English"),
+                **self.writer.snapshot(),
+            },
             "stats": {
                 "songs_generated": self.songs_generated,
                 "avg_rtf": avg_rtf,
@@ -260,6 +279,15 @@ class Radio:
                 self._wake.wait(timeout=2.0)
                 self._wake.clear()
                 continue
+            # Give the lyric prefetcher the idle gap: if no set is cached for an auto song,
+            # it is written now (about 5 s) rather than while YuE2 renders.
+            if job["kind"] == "auto" and self.settings["lyric_mode"] == "auto" and self.writer.available():
+                with self.lock:
+                    sig = self._signature(self.settings)
+                    cached = any(k == sig for k, _ in self.lyric_cache)
+                if not cached:
+                    self._prefetch_wake.set()
+                    time.sleep(0.2)
             try:
                 self._run_job(job)
                 backoff = 3
@@ -294,10 +322,68 @@ class Radio:
                 return None
             return {"kind": "auto"}
 
+    def _signature(self, s: dict) -> str:
+        return json.dumps([s.get("style"), s.get("mood"), s.get("themes"), s.get("language", "English"), int(s.get("target_seconds", 120))])
+
+    def _auto_lyrics(self, s: dict) -> tuple[str, str, str]:
+        """Returns (lyrics, title, mode) for an auto song: cached LLM set, fresh LLM set, or templates."""
+        sig = self._signature(s)
+        with self.lock:
+            for i, (k, w) in enumerate(self.lyric_cache):
+                if k == sig:
+                    self.lyric_cache.pop(i)
+                    self._prefetch_wake.set()
+                    return w.lyrics, w.title, "llm"
+        if self.writer.available():
+            w = self.writer.write(apply_language(s["style"], s.get("language", "English")), s["mood"], s.get("themes", ""),
+                                  s.get("language", "English"), int(s["target_seconds"]), self.rng.randrange(1 << 30))
+            if w:
+                return w.lyrics, w.title, "llm"
+        song = LyricGenerator(self.rng.randrange(1 << 30)).generate(s.get("themes", ""), s["mood"])
+        if s.get("language", "English") != "English":
+            self._record_error(f"Lyric model unavailable or failed; wrote English template lyrics instead of {s.get('language')}")
+        return song.lyrics, song.title, "template"
+
+    def _prefetch_loop(self) -> None:
+        """Keep up to two LLM lyric sets ready for the current settings so songs never wait on text."""
+        while True:
+            self._prefetch_wake.wait(timeout=5.0)
+            self._prefetch_wake.clear()
+            if not self.writer.available():
+                continue
+            with self.lock:
+                active = self.on and self.settings["lyric_mode"] == "auto"
+                s = dict(self.settings)
+                sig = self._signature(s)
+                self.lyric_cache = [(k, w) for k, w in self.lyric_cache if k == sig]
+                have = len(self.lyric_cache)
+                rendering = self.current is not None
+            if not active or have >= 2 or rendering:
+                continue
+            # Never share the GPU with YuE2: the lock is held for the whole lyric call, and a song
+            # cannot start while it is held (see _run_job). If a song is rendering, skip this round.
+            if not self.gpu_lock.acquire(blocking=False):
+                continue
+            try:
+                w = self.writer.write(apply_language(s["style"], s.get("language", "English")), s["mood"], s.get("themes", ""),
+                                      s.get("language", "English"), int(s["target_seconds"]), self.rng.randrange(1 << 30))
+            finally:
+                self.gpu_lock.release()
+            if w:
+                with self.lock:
+                    if self._signature(self.settings) == sig:
+                        self.lyric_cache.append((sig, w))
+                print(f"[lyrics] prefetched '{w.title}' ({w.language}) in {w.seconds:.1f}s", flush=True)
+                self._prefetch_wake.set()  # top up to two
+            else:
+                time.sleep(10)
+
     def _build(self, job: dict) -> tuple[str, str, str, dict]:
         s = dict(self.settings)
-        style = s["style"]
+        language = s.get("language", "English")
+        style = apply_language(s["style"], language)
         mood = s["mood"]
+        self.lyric_mode_used = "custom"
         if job["kind"] == "request":
             req = job["request"]
             lyrics = req["lyrics"]
@@ -307,13 +393,15 @@ class Radio:
         elif s["lyric_mode"] == "instrumental":
             lyrics = ""
             title = instrumental_title(self.rng)
+            self.lyric_mode_used = "instrumental"
         else:
-            song = LyricGenerator(self.rng.randrange(1 << 30)).generate(s["themes"], mood)
-            lyrics, title = song.lyrics, song.title
+            lyrics, title, self.lyric_mode_used = self._auto_lyrics(s)
         title = self._unique_title(title)
         target = int(s["target_seconds"])
+        # Score planning (ABC) is reported to break pronunciation for non-English lyrics.
+        planning = bool(s["planning"]) and language == "English"
         options = {
-            "cot": "full" if s["planning"] else "off",
+            "cot": "full" if planning else "off",
             "seed": self.rng.randrange(1, 2**31 - 1),
             "num_inference_steps": int(s["quality_steps"]),
             "semantic_max_tokens": int(target * SEMANTIC_FPS),
@@ -343,7 +431,8 @@ class Radio:
                 "started_at": time.time(), "kind": job["kind"],
             }
         print(f"[radio] generating '{title}' seed={options['seed']} cot={options['cot']}", flush=True)
-        wav, meta = self.engine.generate(lyrics, style, options)
+        with self.gpu_lock:  # waits for an in-flight lyric call (a few seconds) rather than overlapping it
+            wav, meta = self.engine.generate(lyrics, style, options)
         path = self.library.audio_path(track_id)
         path.write_bytes(wav)
         duration = wav_duration_seconds(wav) or 0.0
@@ -375,4 +464,5 @@ class Radio:
         with self.lock:
             self.ready.append(track_id)
             self.songs_generated += 1
+        self._prefetch_wake.set()
         print(f"[radio] ready '{title}' {duration:.1f}s audio in {elapsed:.1f}s (rtf {rtf:.2f})" if rtf else f"[radio] ready '{title}'", flush=True)

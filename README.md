@@ -14,8 +14,9 @@ songs back to back while you listen. No cloud APIs, no accounts, no telemetry.
   background and the UI shows what is being composed, its phase and an ETA.
 - **Your vibe, your lyrics.** Pick a preset or write a style prompt, choose a mood,
   optional lyric themes, target length and vocals mode (auto lyrics, instrumental,
-  or only your own requests). A built-in lyric writer produces rhymed, singable
-  verses offline.
+  or only your own requests). A built-in lyric writer runs a small local language
+  model (Qwen3 1.7B on llama.cpp) that writes original lyrics in the language you
+  choose; an offline template writer is the fallback.
 - **Requests.** Paste your own lyrics (with `[Verse]` / `[Chorus]` tags) and the
   station plays them next.
 - **Library.** Every song is saved as a 48 kHz stereo WAV. Bookmark, replay, download or
@@ -51,8 +52,24 @@ ahead (default 2), shows a "buffering" state between tracks, and the Engine tab
 reports the measured realtime factor so you can lower the target length or buffer
 more songs. Memory: Q8 peaks around 9 GB of GPU memory, Q4 around 8 GB.
 
-YuE2 sings in **English only** and its weights are licensed **CC BY-NC 4.0**
-(non-commercial). Songs are generated audio; lengths are approximate.
+YuE2's weights are licensed **CC BY-NC 4.0** (non-commercial). Songs are
+generated audio; lengths are approximate.
+
+### Languages
+
+The lyric model writes about thirty languages. What is known about YuE2 *singing*
+them differs, and the Station panel labels each choice accordingly:
+
+| Tier | Languages | Basis |
+|---|---|---|
+| Evaluated | English, Chinese | the YuE2 paper's benchmark |
+| Demo | Japanese, Korean, Spanish, Russian | the official YuE2 demo page |
+| Reported | Portuguese, French, Polish, Romanian, Greek, Arabic | user reports on the model card |
+| Untested | German, Italian, Dutch, Turkish, Vietnamese, Indonesian, Thai, Hindi, Malay, Swedish, Danish, Finnish, Czech, Filipino, Persian, Hungarian, Cantonese | languages the training transcriber covers; no reports |
+
+The language name is prepended to the style prompt automatically. Score planning is
+switched off for non-English lyrics because it has been reported to garble
+pronunciation. Your own requests may be in any language.
 
 ## Install and run (Pinokio)
 
@@ -69,6 +86,18 @@ Menu items: **Start**, **Songs** (opens the WAV folder), **Update** (pulls the
 launcher and refreshes Python deps), **Reinstall** (switch Q8/Q4), **Reset**
 (removes binaries, model and venv; keeps your songs and library).
 
+### The lyric writer
+
+`install.js` downloads a llama.cpp build for your platform (Metal on macOS, Vulkan on
+Windows/Linux GPUs, CPU otherwise) and the Qwen3 1.7B instruct model at Q4_K_M
+(about 1.1 GB). For each song the station runs one short `llama-completion` process
+with a JSON-schema grammar that returns five lyric blocks (verse, chorus, verse,
+bridge, outro); the app assembles the `[Verse]`/`[Chorus]` sections YuE2 expects and
+repeats the chorus itself. Outputs are checked for script, length and repetition,
+retried once with a higher repeat penalty, and otherwise replaced by the template
+writer. Lyric sets are prefetched while the previous song renders, so the song cycle
+time is unchanged. Nothing stays resident between calls.
+
 ### What gets installed where
 
 ```
@@ -77,15 +106,17 @@ infinite_radio/
 │   ├── server.py        # FastAPI web server + JSON API
 │   ├── radio.py         # station scheduler, lookahead queue, library
 │   ├── engine.py        # supervises audiocpp_server, runs generations
-│   ├── lyrics.py        # offline lyric writer
+│   ├── lyrics.py        # offline template lyric writer (fallback)
+│   ├── lyricwriter.py   # llama.cpp lyric writer (schema-constrained)
 │   ├── sets.py          # DJ set state (kept, cut, sections)
 │   ├── mixer.py         # crossfade mixer with exact chapter times
 │   ├── scene.py         # image/GIF/video -> seamless 1080p loop
 │   ├── episodes.py      # render jobs: cards, ffmpeg pass, outputs
 │   ├── static/          # dark neon web UI
 │   ├── tools/extract_bin.py
-│   ├── bin/             # audio.cpp release (downloaded)
+│   ├── bin/             # audio.cpp release (downloaded); bin/llama/ holds llama.cpp
 │   ├── models/Yue2-3B-GGUF/  # YuE2 GGUF package (downloaded)
+│   ├── models/lyrics/   # Qwen3 1.7B GGUF for the lyric writer (downloaded)
 │   ├── output/          # generated WAV files, episodes/<name>/ folders
 │   └── data/            # station.json, library.json, server config
 ├── install.js  start.js  update.js  reset.js  pinokio.js  pinokio.json
@@ -156,7 +187,7 @@ Base URL: the address shown in the Pinokio terminal (for example
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/status` | Station state, settings, ready queue, current job (phase, elapsed, ETA), engine info, stats |
-| GET | `/api/station` / PUT `/api/station` | Read / update station settings (`style`, `mood`, `lyric_mode`, `themes`, `target_seconds`, `planning`, `lookahead`, `quality_steps`) |
+| GET | `/api/station` / PUT `/api/station` | Read / update station settings (`style`, `mood`, `lyric_mode`, `themes`, `language`, `target_seconds`, `planning`, `lookahead`, `quality_steps`) |
 | POST | `/api/station/on`, `/api/station/off` | Turn the generator on or off |
 | GET | `/api/next` | Pop the next ready song (`track` is `null` while buffering) |
 | POST | `/api/requests` | Queue your own lyrics `{lyrics, title?, style?}` |
@@ -167,7 +198,7 @@ Base URL: the address shown in the Pinokio terminal (for example
 | POST | `/api/tracks/{id}/like` | Toggle bookmark (stored as the `liked` flag) |
 | POST | `/api/tracks/{id}/requeue` | Put a song back at the front of the queue |
 | DELETE | `/api/tracks/{id}` | Delete a song and its WAV |
-| GET | `/api/presets` | Style presets and moods |
+| GET | `/api/presets` | Style presets, moods, and languages with their tier |
 | GET | `/api/engine/log`, POST `/api/engine/restart` | audio.cpp log tail / restart |
 | POST | `/api/sets/start` `{name}` | Open a DJ set (turns the station on) |
 | POST | `/api/sets/cut` `{track_id?}`, `/api/sets/undo`, `/api/sets/close` | Cut the playing song, undo the last cut, close the set |
@@ -270,6 +301,9 @@ python server.py
 
 - **"YuE2 main GGUF not found"**: the model download did not finish. Run
   **Reinstall** from the menu.
+- **Lyrics come out in English although another language is selected**: the lyric
+  model is missing or failed; the Engine tab's "Lyric writer" line says why. Run
+  **Install** again to fetch llama.cpp and the model.
 - **Engine state `error` / "audio.cpp server exited"**: check the Engine tab log
   and `logs/api/start.js/latest`. Host RAM pressure is the most common cause on
   16 GB machines; try the Q4 model and a shorter target length.
@@ -283,4 +317,6 @@ python server.py
   (runtime, MIT-licensed; see `app/bin/LICENSE` after install).
 - [YuE2](https://huggingface.co/audio-cpp/Yue2-3B-GGUF) by the m-a-p team, GGUF
   packaging by audio-cpp. Weights: CC BY-NC 4.0, non-commercial.
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) and
+  [Qwen3 1.7B](https://huggingface.co/unsloth/Qwen3-1.7B-GGUF) (Apache 2.0) for the lyric writer.
 - Infinite Radio launcher and app: MIT (see `LICENSE`).

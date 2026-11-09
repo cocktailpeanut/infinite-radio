@@ -25,7 +25,7 @@
   <!-- Station controls -->
   <aside class="panel station">
     <h2>Station</h2>
-    <p class="hint">Describe the vibe. YuE2 sings in English only, so keep style prompts in English.</p>
+    <p class="hint">Describe the vibe. Write the style prompt in English; the lyric language is chosen below.</p>
 
     <div class="presets" id="presets"></div>
 
@@ -54,6 +54,12 @@
       <input id="f-themes" type="text" placeholder="ocean, late night driving, letting go">
     </label>
 
+    <label class="field">
+      <span>Lyric language <em id="f-lang-tier"></em></span>
+      <select id="f-language"></select>
+      <small id="f-lang-note" class="field-note"></small>
+    </label>
+
     <label class="field range">
       <span>Target length <b id="f-len-label">2:00</b></span>
       <input id="f-len" type="range" min="30" max="360" step="15" value="120">
@@ -72,7 +78,7 @@
       <label class="field check">
         <span>Score planning</span>
         <input id="f-planning" type="checkbox">
-        <small>Slower, more structured songs</small>
+        <small id="f-planning-note">Slower, more structured songs</small>
       </label>
     </div>
 

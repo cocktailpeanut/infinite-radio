@@ -52,6 +52,8 @@ def main() -> int:
         print(f"no bin dir at {BIN_DIR}")
         return 1
     archives = sorted(list(BIN_DIR.glob("*.tar.gz")) + list(BIN_DIR.glob("*.tgz")) + list(BIN_DIR.glob("*.zip")))
+    llama_dir = BIN_DIR / "llama"
+    llama_archives = sorted(list(llama_dir.glob("*.tar.gz")) + list(llama_dir.glob("*.zip"))) if llama_dir.exists() else []
     runtime = {}
     if RUNTIME_FILE.exists():
         try:
@@ -76,7 +78,30 @@ def main() -> int:
             runtime["backend"] = backend
             runtime["archive"] = a.name
         a.unlink()
+    for a in llama_archives:
+        print(f"extracting {a.name} (llama.cpp)")
+        if a.suffix == ".zip":
+            with zipfile.ZipFile(a) as z:
+                z.extractall(llama_dir)
+        else:
+            with tarfile.open(a, "r:*") as t:
+                if hasattr(tarfile, "data_filter"):
+                    t.extractall(llama_dir, filter="data")
+                else:
+                    t.extractall(llama_dir)
+        a.unlink()
     _mark_executable(BIN_DIR)
+    if llama_dir.exists():
+        # Prefer the one-shot completion tool when the build ships it; fall back to llama-cli.
+        for name in ("llama-completion", "llama-cli"):
+            exe_name = name + (".exe" if os.name == "nt" else "")
+            found = sorted(llama_dir.rglob(exe_name), key=lambda p: len(p.parts))
+            if found:
+                runtime["llama"] = str(found[0].relative_to(APP_DIR))
+                print(f"llama.cpp: {found[0]}")
+                break
+        else:
+            print("WARNING: no llama-cli/llama-completion found; lyric writer will use templates")
     exe = "audiocpp_server.exe" if os.name == "nt" else "audiocpp_server"
     hits = sorted(BIN_DIR.rglob(exe), key=lambda p: len(p.parts))
     if not hits:

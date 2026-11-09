@@ -195,7 +195,8 @@
     pill.title = e.message || "";
     if (state.activeTab === "engine") {
       const kv = [["State", `${e.state} — ${e.message}`], ["Backend", e.hardware + (e.backend ? ` (${e.backend})` : "")], ["audio.cpp", e.version || "unknown"],
-        ["Model", `${e.model || "—"} + ${e.vae || "—"}`], ["Loaded", e.model_loaded ? "yes" : "no (loads on first song)"], ["Restarts", String(e.restarts)], ["Songs made", String(st.stats.songs_generated)]];
+        ["Model", `${e.model || "—"} + ${e.vae || "—"}`], ["Loaded", e.model_loaded ? "yes" : "no (loads on first song)"], ["Restarts", String(e.restarts)], ["Songs made", String(st.stats.songs_generated)],
+        ["Lyric writer", st.lyrics ? (st.lyrics.available ? `${st.lyrics.model} · ${st.lyrics.ready} set${st.lyrics.ready === 1 ? "" : "s"} ready · last ${st.lyrics.last_mode}${st.lyrics.last?.seconds ? ` (${st.lyrics.last.seconds}s)` : ""}${st.lyrics.last?.error ? ` · ${st.lyrics.last.error}` : ""}` : "templates (lyric model not installed)") : "—"]];
       $("engine-kv").innerHTML = kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
       $("engine-log").textContent = (e.last_log || []).join("\n") || "(no log yet)";
     }
@@ -210,6 +211,8 @@
     $("f-style").value = s.style; $("f-mood").value = s.mood; $("f-lyric-mode").value = s.lyric_mode;
     $("f-themes").value = s.themes || ""; $("f-len").value = s.target_seconds; $("f-len-label").textContent = fmt(s.target_seconds);
     $("f-lookahead").value = String(s.lookahead); $("f-planning").checked = !!s.planning;
+    if (s.language) $("f-language").value = s.language;
+    updateLanguageNotes();
     document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.style === s.style));
   };
 
@@ -233,7 +236,7 @@
   const describeVibe = (st) => {
     if (!st) return "—";
     const vocals = { auto: "auto lyrics", instrumental: "instrumental", "custom-only": "requests only" }[st.lyric_mode] || st.lyric_mode;
-    return `${st.style.split(",").slice(0, 3).map((x) => x.trim()).join(", ")} · ${st.mood} · ${vocals} · ~${fmt(st.target_seconds)} songs${st.themes ? ` · themes: ${st.themes}` : ""}`;
+    return `${st.language || "English"} · ${st.style.split(",").slice(0, 3).map((x) => x.trim()).join(", ")} · ${st.mood} · ${vocals} · ~${fmt(st.target_seconds)} songs${st.themes ? ` · themes: ${st.themes}` : ""}`;
   };
   const renderSetup = () => {
     const on = !!state.setup;
@@ -564,7 +567,18 @@
   $("btn-stop").onclick = async () => { await api("/api/station/off", { method: "POST" }); state.listening = false; setBuffering(false); refresh(); };
 
   // ---------- settings ----------
-  const formPatch = () => ({ style: $("f-style").value.trim(), mood: $("f-mood").value, lyric_mode: $("f-lyric-mode").value, themes: $("f-themes").value.trim(), target_seconds: Number($("f-len").value), lookahead: Number($("f-lookahead").value), planning: $("f-planning").checked });
+  const formPatch = () => ({ style: $("f-style").value.trim(), mood: $("f-mood").value, lyric_mode: $("f-lyric-mode").value, themes: $("f-themes").value.trim(), target_seconds: Number($("f-len").value), lookahead: Number($("f-lookahead").value), planning: $("f-planning").checked, language: $("f-language").value });
+  const updateLanguageNotes = () => {
+    const lang = $("f-language").value, meta = (state.languages || []).find((l) => l.name === lang);
+    $("f-lang-tier").textContent = meta ? `(${meta.label})` : "";
+    const note = $("f-lang-note"), writer = state.status?.lyrics;
+    if (writer && !writer.available && lang !== "English") { note.textContent = "The lyric model is not installed, so auto lyrics fall back to English templates. Run Install again to add it."; note.className = "field-note warn"; }
+    else if (meta && meta.tier === "untested") { note.textContent = "YuE2 was not shown singing this language; expect an accent or garbled words."; note.className = "field-note warn"; }
+    else if (meta && meta.tier === "reported") { note.textContent = "Users report YuE2 sings this language acceptably."; note.className = "field-note"; }
+    else { note.textContent = ""; note.className = "field-note"; }
+    $("f-planning-note").textContent = lang === "English" ? "Slower, more structured songs" : "Slower, more structured songs. Off for non-English lyrics (it garbles pronunciation).";
+    $("f-planning").disabled = lang !== "English";
+  };
   const saveSettings = async () => {
     try {
       await api("/api/station", { method: "PUT", body: formPatch() });
@@ -575,13 +589,14 @@
     } catch (e) { toast(e.message); }
   };
   $("save").onclick = saveSettings;
-  ["f-style", "f-mood", "f-lyric-mode", "f-themes", "f-len", "f-lookahead", "f-planning"].forEach((id) => {
-    $(id).addEventListener("input", () => { state.settingsDirty = true; if (id === "f-len") $("f-len-label").textContent = fmt($("f-len").value); if (state.setup) renderSetup(); });
+  ["f-style", "f-mood", "f-lyric-mode", "f-themes", "f-len", "f-lookahead", "f-planning", "f-language"].forEach((id) => {
+    $(id).addEventListener("input", () => { state.settingsDirty = true; if (id === "f-len") $("f-len-label").textContent = fmt($("f-len").value); if (id === "f-language") updateLanguageNotes(); if (state.setup) renderSetup(); });
   });
   const loadPresets = async () => {
     const p = await api("/api/presets");
-    state.presets = p.presets; state.moods = p.moods;
+    state.presets = p.presets; state.moods = p.moods; state.languages = p.languages || [];
     $("f-mood").innerHTML = p.moods.map((m) => `<option value="${m}">${m[0].toUpperCase() + m.slice(1)}</option>`).join("");
+    $("f-language").innerHTML = state.languages.map((l) => `<option value="${l.name}">${l.name}${l.tier === "evaluated" ? "" : l.tier === "demo" ? " · demo" : l.tier === "reported" ? " · reported" : " · untested"}</option>`).join("");
     $("presets").innerHTML = p.presets.map((x) => `<button class="chip" data-style="${esc(x.style)}" data-mood="${x.mood}">${esc(x.name)}</button>`).join("");
     document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { $("f-style").value = c.dataset.style; $("f-mood").value = c.dataset.mood; state.settingsDirty = true; saveSettings(); });
   };
@@ -655,9 +670,12 @@
     fxParticles = Array.from({ length: n }, () => ({ x: Math.random() * W, y: Math.random() * H, v: kind === "rain" ? 7 + Math.random() * 6 : kind === "dust" ? 0.25 + Math.random() * 0.4 : 0.7 + Math.random() * 1.1, len: 10 + Math.random() * 16, a: 0.25 + Math.random() * 0.45, ph: Math.random() * 6.28 }));
     fxKind = kind;
   };
+  let fxLast = 0;
   const fxLoop = (ts = 0) => {
     if (!fxRunning) return;
     requestAnimationFrame(fxLoop);
+    if (ts - fxLast < 33 || document.hidden) return;  // ~30 fps, idle when hidden
+    fxLast = ts;
     const W = fxCanvas.width, H = fxCanvas.height;
     fxCtx.clearRect(0, 0, W, H);
     if (!fxParticles || fxKind === "none") return;
