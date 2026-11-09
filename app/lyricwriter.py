@@ -74,6 +74,7 @@ SYSTEM = (
 )
 
 
+
 @dataclass
 class Written:
     title: str
@@ -99,6 +100,43 @@ def apply_language(style: str, language: str) -> str:
 BAD_TITLE = re.compile(r"\[|\]|\b(verse|chorus|bridge|outro|intro|title)\d*\b|\d+:\d+|^\W*$", re.I)
 
 
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def _shorten_title(t: str) -> str:
+    """A title, not a lyric line: cut at the first natural break, then cap length.
+
+    Hangul and other spaced CJK scripts are capped by characters too, since a
+    whole sung line has many words but each word is short.
+    """
+    cjk = bool(_CJK.search(t))
+    limit_chars = 16 if cjk else 36
+    if len(t) <= limit_chars and len(t.split()) <= 6:
+        return t
+    head = re.split(r"[,，、。.!?！？;；:：·…—–-]\s*", t)[0].strip()
+    if 2 <= len(head) <= limit_chars and len(head.split()) <= 6:
+        return head
+    words = head.split() if " " in head else [head]
+    out = ""
+    for w in words:
+        trial = (out + " " + w).strip()
+        if len(trial) > limit_chars or len(trial.split()) > 5:
+            break
+        out = trial
+    out = out or head[:limit_chars]
+    if not cjk:  # a cut title should not end on filler ("The Weight of Choice Is")
+        words = out.split()
+        while len(words) > 1 and words[-1].lower() in _TRAILING_FILLER:
+            words.pop()
+        out = " ".join(words)
+    return out
+
+
+_TRAILING_FILLER = {"is", "are", "was", "the", "a", "an", "of", "and", "to", "in", "on", "with", "than", "for", "my",
+                    "your", "our", "at", "by", "from", "until", "when", "while", "as", "but", "so", "or", "if", "that",
+                    "into", "because", "de", "la", "el", "y", "que", "der", "die", "das", "und", "le", "et"}
+
+
 def _clean_title(title: str, fallback_lines: list[str]) -> str:
     """Small models sometimes put section labels or timings in the title; derive one from the hook instead."""
     t = re.sub(r"\s+", " ", title).strip().strip("\"“”'.")
@@ -106,6 +144,7 @@ def _clean_title(title: str, fallback_lines: list[str]) -> str:
         hook = (fallback_lines[0] if fallback_lines else "Untitled").strip().rstrip(",.!?;:")
         words = hook.split()
         t = (" ".join(words[:5]) if len(words) > 1 else hook[:24]).rstrip(",.!?;:、。")
+    t = _shorten_title(t)
     if t and t.islower() and re.search(r"[A-Za-z]", t):
         t = " ".join(w if w in ("de", "la", "del", "y", "the", "of", "and", "der", "die", "das", "und") else w[:1].upper() + w[1:] for w in t.split())
         t = t[:1].upper() + t[1:]

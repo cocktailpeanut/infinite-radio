@@ -26,14 +26,26 @@ BUNDLED = {
     "medium": FONT_DIR / "Poppins-Medium.ttf",
 }
 # System fonts with CJK coverage, tried in order (bold-ish first).
-CJK_FONTS = [
-    "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-    "C:/Windows/Fonts/YuGothB.ttc", "C:/Windows/Fonts/meiryob.ttc", "C:/Windows/Fonts/malgunbd.ttf",
-    "C:/Windows/Fonts/msyhbd.ttc", "C:/Windows/Fonts/msgothic.ttc", "C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/msyh.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-]
+# System fonts per CJK script, tried in order. Hiragino has kana and kanji but no Hangul,
+# so Korean must not fall through to it.
+_NOTO = ["/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"]
+_UNIVERSAL = ["/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"]
+CJK_FONTS = {
+    "ko": ["/System/Library/Fonts/AppleSDGothicNeo.ttc", "C:/Windows/Fonts/malgunbd.ttf", "C:/Windows/Fonts/malgun.ttf"] + _NOTO + _UNIVERSAL,
+    "ja": ["/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", "C:/Windows/Fonts/YuGothB.ttc", "C:/Windows/Fonts/meiryob.ttc",
+           "C:/Windows/Fonts/msgothic.ttc"] + _NOTO + _UNIVERSAL,
+    "zh": ["/System/Library/Fonts/Hiragino Sans GB.ttc", "/System/Library/Fonts/PingFang.ttc", "C:/Windows/Fonts/msyhbd.ttc",
+           "C:/Windows/Fonts/msyh.ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"] + _NOTO + _UNIVERSAL,
+}
+# Face index inside .ttc collections for each weight we use (display/semibold want bold, medium wants medium).
+TTC_FACE = {
+    "AppleSDGothicNeo.ttc": {"display": 6, "semibold": 4, "medium": 2},
+    "Hiragino Sans GB.ttc": {"display": 2, "semibold": 2, "medium": 0},
+    "NotoSansCJK-Regular.ttc": {}, "NotoSansCJK-Bold.ttc": {},
+}
+HANGUL_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+KANA_RE = re.compile(r"[\u3040-\u30ff]")
 CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
 INK = (10, 10, 20)
 PAPER = (248, 248, 252)
@@ -46,15 +58,40 @@ def needs_cjk(text: str) -> bool:
     return bool(CJK_RE.search(text or ""))
 
 
+def cjk_script(text: str) -> str | None:
+    """'ko', 'ja', 'zh' or None. Hangul wins (Korean titles may include hanja); kana means Japanese."""
+    if not text:
+        return None
+    if HANGUL_RE.search(text):
+        return "ko"
+    if KANA_RE.search(text):
+        return "ja"
+    if CJK_RE.search(text):
+        return "zh"
+    return None
+
+
+def _covers(f, text: str) -> bool:
+    """True when the font draws the first CJK character instead of its missing-glyph box."""
+    m = CJK_RE.search(text) or HANGUL_RE.search(text)
+    if not m:
+        return True
+    try:
+        return f.getmask(m.group(0)).getbbox() != f.getmask("\U0010FFFD").getbbox()
+    except Exception:
+        return True
+
+
 def font(kind: str, size: int, text: str = "") -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Bundled font of `kind` (display|semibold|medium); a CJK system font when the text needs it."""
     size = max(8, int(size))
-    key = (kind, size, needs_cjk(text))
+    script = cjk_script(text)
+    key = (kind, size, script)
     if key in _cache:
         return _cache[key]
     candidates: list[str] = []
-    if needs_cjk(text):
-        candidates += CJK_FONTS
+    if script:
+        candidates += CJK_FONTS[script]
     p = BUNDLED.get(kind)
     if p and p.exists():
         candidates.append(str(p))
@@ -64,10 +101,14 @@ def font(kind: str, size: int, text: str = "") -> ImageFont.FreeTypeFont | Image
     for c in candidates:
         if Path(c).exists():
             try:
-                f = ImageFont.truetype(c, size)
-                break
+                idx = TTC_FACE.get(Path(c).name, {}).get(kind, 0)
+                cand = ImageFont.truetype(c, size, index=idx)
             except Exception:
                 continue
+            if script and not _covers(cand, text):
+                continue
+            f = cand
+            break
     if f is None:
         try:
             f = ImageFont.load_default(size=size)
