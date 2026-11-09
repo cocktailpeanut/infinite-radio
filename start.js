@@ -6,8 +6,6 @@ module.exports = {
       params: {
         venv: "env",
         path: "app",
-        // audio.cpp logs a lot; refresh the terminal state at most once a second
-        state_interval: 1000,
         message: [
           "python server.py",
         ],
