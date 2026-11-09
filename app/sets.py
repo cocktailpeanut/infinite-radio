@@ -206,6 +206,8 @@ class SetManager:
                     e["state"] = "kept"
                     if item.get("display_title"):
                         e["display_title"] = str(item["display_title"])[:80]
+                    if item.get("subtitle") is not None:  # "" hides the subtitle for this song
+                        e["subtitle"] = str(item["subtitle"])[:60]
                     new_list.append(e)
                 kept_ids = {e["track_id"] for e in new_list}
                 dropped = [e for e in s["tracks"] if e["track_id"] not in kept_ids]

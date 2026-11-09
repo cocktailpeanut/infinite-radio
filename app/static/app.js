@@ -328,11 +328,25 @@
   $("scene-settings").addEventListener("change", async (ev) => {
     const el = ev.target.closest("[data-scene]"); if (!el) return;
     const v = el.type === "checkbox" ? el.checked : (el.type === "range" ? Number(el.value) : el.value);
-    try { state.scene = await api("/api/scene", { method: "PUT", body: { [el.dataset.scene]: v } }); renderScene(); renderStage(true); }
+    try { state.scene = await api("/api/scene", { method: "PUT", body: { [el.dataset.scene]: v } }); renderScene(); renderStage(true); renderEditor(); }
     catch (e) { toast(e.message); }
   });
 
   // ---------- tracklist editor ----------
+  // Line under a song title: per-song override, then the chosen source. Never the style prompt.
+  const subtitleFor = (t, source) => {
+    if (source === "genre") return (t.genre || "").trim();
+    if (source === "mood") return t.mood ? t.mood[0].toUpperCase() + t.mood.slice(1) : "";
+    if (source === "language") {
+      if (t.language) return t.language;
+      const first = (t.style || "").split(",")[0].trim().toLowerCase();
+      const hit = (state.languages || []).find((l) => l.name.toLowerCase() === first);
+      return hit ? hit.name : "";
+    }
+    return "";
+  };
+  const subtitleSource = () => (state.scene && state.scene.settings && state.scene.settings.subtitle) || "none";
+
   const renderEditor = () => {
     const ed = state.editor, sec = $("ep-editor");
     sec.hidden = !ed;
@@ -343,7 +357,8 @@
       <li class="ed-row ${t.available === false ? "unavailable" : ""}" data-i="${i}">
         <span class="num">${String(i + 1).padStart(2, "0")}</span>
         <div><input value="${esc(t.display_title)}" data-act="rename" ${t.available === false ? "disabled" : ""}>
-          <div class="sub">${fmt(t.duration || 0)}${t.style ? " · " + esc(t.style.split(",").slice(1, 3).join(",").trim()) : ""}${t.available === false ? " · audio missing" : ""}</div></div>
+          ${subtitleSource() !== "none" && t.available !== false ? `<input class="ed-subtitle" data-act="subtitle" value="${esc(t.subtitleEdited ? (t.subtitle || "") : subtitleFor(t, subtitleSource()))}" placeholder="no subtitle">` : ""}
+          <div class="sub">${fmt(t.duration || 0)}${t.genre ? " · " + esc(t.genre) : t.mood ? " · " + esc(t.mood) : ""}${t.available === false ? " · audio missing" : ""}</div></div>
         <div class="ops"><button data-act="up" title="Move up">↑</button><button data-act="down" title="Move down">↓</button><button data-act="remove" title="Remove">✕</button></div>
       </li>`).join("") || `<li class="hint">No songs left. Add some from the Library or discard.</li>`;
     const total = ed.tracks.reduce((a, t) => a + (t.duration || 0), 0) - Math.max(0, ed.tracks.length - 1) * Number($("ed-xf").value);
@@ -360,8 +375,11 @@
     renderEditor();
   };
   $("ed-list").addEventListener("input", (ev) => {
-    const inp = ev.target.closest("input[data-act=rename]"), row = ev.target.closest(".ed-row");
-    if (inp && row && state.editor) state.editor.tracks[Number(row.dataset.i)].display_title = inp.value;
+    const row = ev.target.closest(".ed-row");
+    if (!row || !state.editor) return;
+    const t = state.editor.tracks[Number(row.dataset.i)];
+    if (ev.target.matches("input[data-act=rename]")) t.display_title = ev.target.value;
+    if (ev.target.matches("input[data-act=subtitle]")) { t.subtitle = ev.target.value; t.subtitleEdited = true; }
   });
   $("ed-name").oninput = () => { if (state.editor) state.editor.name = $("ed-name").value; };
   $("ed-xf").onchange = renderEditor;
@@ -370,7 +388,8 @@
   const openSetEditor = async (setId) => {
     const s = await api(`/api/sets/${setId}`);
     const kept = s.tracks.filter((e) => e.state === "kept");
-    state.editor = { kind: "set", setId, name: s.name, tracks: kept.map((e) => ({ track_id: e.track_id, display_title: e.display_title || e.title, duration: e.duration, style: e.style, available: e.available })) };
+    state.editor = { kind: "set", setId, name: s.name, tracks: kept.map((e) => ({ track_id: e.track_id, display_title: e.display_title || e.title, duration: e.duration, style: e.style, available: e.available,
+      mood: e.mood, genre: e.genre, language: e.language, subtitle: e.subtitle, subtitleEdited: e.subtitle !== undefined && e.subtitle !== null })) };
     renderEditor();
     $("ep-editor").scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -383,7 +402,8 @@
 
   $("ed-render").onclick = async () => {
     const ed = state.editor; if (!ed) return;
-    const tracks = ed.tracks.filter((t) => t.available !== false).map((t) => ({ track_id: t.track_id, display_title: t.display_title }));
+    const tracks = ed.tracks.filter((t) => t.available !== false).map((t) => ({ track_id: t.track_id, display_title: t.display_title,
+      ...(t.subtitleEdited ? { subtitle: t.subtitle || "" } : {}) }));
     const crossfade = Number($("ed-xf").value);
     try {
       if (ed.kind === "set") {
@@ -638,7 +658,7 @@
     const chosen = state.libTracks.filter((t) => state.libSelected.has(t.id));
     if (!chosen.length) return toast("Select some songs first.");
     chosen.sort((a, b) => a.created - b.created);
-    openCustomEditor(`${(state.status?.settings?.name) || "Infinite Radio"} · Selection`, chosen.map((t) => ({ track_id: t.id, display_title: t.title, duration: t.duration, style: t.style, available: true })));
+    openCustomEditor(`${(state.status?.settings?.name) || "Infinite Radio"} · Selection`, chosen.map((t) => ({ track_id: t.id, display_title: t.title, duration: t.duration, style: t.style, available: true, mood: t.mood, genre: t.genre, language: t.language })));
     state.libSelectMode = false; state.libSelected.clear(); renderLibrary();
   };
 
@@ -725,11 +745,15 @@
       if (!fxRunning) { fxRunning = true; requestAnimationFrame(fxLoop); }
     }
     const t = state.track, card = $("stage-card");
-    card.hidden = !t || !state.set;
-    if (t) {
-      $("stage-num").textContent = String(state.set.kept || 0).padStart(2, "0");
+    const titleStyle = sc.settings.title_style || "minimal";
+    card.hidden = !t || !state.set || titleStyle === "none";
+    card.className = `stage-card ${titleStyle}`;
+    if (t && state.set) {
+      const n = String(Math.max(1, state.set.kept || 0)).padStart(2, "0");
+      $("stage-num").textContent = n; $("stage-n").textContent = n;
       $("stage-title").textContent = t.title;
-      $("stage-tags").textContent = t.style.split(",").slice(1, 5).map((x) => x.trim()).filter(Boolean).join(" · ");
+      const sub = subtitleFor(t, sc.settings.subtitle || "none");
+      $("stage-tags").textContent = sub; $("stage-tags").hidden = !sub;
     }
   };
   window.addEventListener("resize", () => { if (state.set && state.scene) renderStage(true); });

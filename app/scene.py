@@ -43,7 +43,14 @@ DEFAULT_SETTINGS = {
     "pingpong": False,       # video loops only
     "loop_seconds": 24,
     "hw_encode": True,       # use VideoToolbox / NVENC / AMF / QSV when available
+    "title_style": "minimal",  # minimal | card | none  (song titles on screen)
+    "subtitle": "none",        # none | genre | mood | language  (line under the title)
 }
+
+TITLE_STYLES = ("minimal", "card", "none")
+SUBTITLE_SOURCES = ("none", "genre", "mood", "language")
+# Settings that do not change the rendered loop picture, so they must not invalidate the cache.
+NON_VISUAL = {"hw_encode", "title_style", "subtitle"}
 
 MOOD_PALETTES = {
     "dreamy": ("#8b5cf6", "#22d3ee", "#0b0b18"),
@@ -134,6 +141,10 @@ class Scene:
                     continue
                 if k == "weather" and v not in ("none", "rain", "snow", "leaves", "dust"):
                     continue
+                if k == "title_style" and v not in TITLE_STYLES:
+                    continue
+                if k == "subtitle" and v not in SUBTITLE_SOURCES:
+                    continue
                 if k == "weather_density":
                     v = float(min(1.0, max(0.0, float(v))))
                 if k == "loop_seconds":
@@ -193,7 +204,7 @@ class Scene:
         with self.lock:
             src = SCENE_DIR / self.state["file"] if self.state["file"] else None
             stamp = f"{src.stat().st_mtime_ns}:{src.stat().st_size}" if src and src.exists() else "none"
-            visual = {k: v for k, v in self.state["settings"].items() if k != "hw_encode"}
+            visual = {k: v for k, v in self.state["settings"].items() if k not in NON_VISUAL}
             payload = json.dumps({"kind": self.state["kind"], "stamp": stamp, "settings": visual,
                                   "mood": mood if self.state["kind"] == "none" else "", "title": title if self.state["kind"] == "none" else ""}, sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()[:16]

@@ -112,6 +112,7 @@ class SetCut(BaseModel):
 class TrackRef(BaseModel):
     track_id: str
     display_title: str | None = None
+    subtitle: str | None = None  # per-song override; "" hides it
 
 
 class SetUpdate(BaseModel):
@@ -141,6 +142,8 @@ class ScenePatch(BaseModel):
     pingpong: bool | None = None
     loop_seconds: int | None = None
     hw_encode: bool | None = None
+    title_style: str | None = None
+    subtitle: str | None = None
 
 
 class PlayerEvent(BaseModel):
@@ -372,6 +375,8 @@ def get_set(set_id: str):
         if t:
             e["style"] = t.get("style")
             e["duration"] = t.get("duration")
+            for k in ("mood", "genre", "language"):
+                e[k] = t.get(k)
     return s
 
 
@@ -397,7 +402,8 @@ def render_set(set_id: str, body: RenderRequest):
         raise HTTPException(404, "set not found")
     if s["status"] == "open":
         raise HTTPException(409, "close the set before rendering")
-    kept = [{"track_id": e["track_id"], "display_title": e.get("display_title")} for e in s["tracks"] if e["state"] == "kept"]
+    kept = [{"track_id": e["track_id"], "display_title": e.get("display_title"), "subtitle": e.get("subtitle")}
+            for e in s["tracks"] if e["state"] == "kept"]
     try:
         job = episodes.create(body.name or s["name"], kept, body.crossfade or 2.0, set_id=set_id)
     except ValueError as e:
@@ -434,7 +440,8 @@ def suggest_tracks(source: str = "bookmarked", minutes: int = Query(60, ge=5, le
         import random
         random.shuffle(chosen)
     return {"source": source, "minutes": minutes, "duration": round(total, 1),
-            "tracks": [{"track_id": t["id"], "display_title": t["title"], "duration": t.get("duration"), "style": t.get("style"), "liked": t.get("liked", False)} for t in chosen]}
+            "tracks": [{"track_id": t["id"], "display_title": t["title"], "duration": t.get("duration"), "style": t.get("style"), "liked": t.get("liked", False),
+                        "mood": t.get("mood"), "genre": t.get("genre"), "language": t.get("language")} for t in chosen]}
 
 
 @app.post("/api/episodes")

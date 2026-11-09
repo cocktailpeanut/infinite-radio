@@ -112,9 +112,9 @@
       <canvas id="stage-fx"></canvas>
       <div class="stage-vignette"></div>
       <div class="stage-lockup">INFINITE RADIO · <span id="stage-station">Infinite Radio</span></div>
-      <div class="stage-card" id="stage-card" hidden>
+      <div class="stage-card minimal" id="stage-card" hidden>
         <div class="stage-kicker">NOW PLAYING · <span id="stage-num">01</span></div>
-        <div class="stage-title" id="stage-title">—</div>
+        <div class="stage-title"><span class="stage-n" id="stage-n">01</span><span id="stage-title">—</span></div>
         <div class="stage-tags" id="stage-tags"></div>
       </div>
       <div class="stage-empty" id="stage-empty">Add a scene to see your set the way the episode will look.</div>
@@ -252,6 +252,14 @@
             <select data-scene="weather"><option value="none">None</option><option value="rain">Rain</option><option value="snow">Snow</option><option value="leaves">Leaves</option><option value="dust">Dust</option></select>
           </label>
           <label class="field inline-field image-only"><span>Density</span><input type="range" min="0" max="1" step="0.1" data-scene="weather_density"></label>
+          <div class="scene-titles">
+            <label class="field inline-field"><span>Song titles</span>
+              <select data-scene="title_style"><option value="minimal">Minimal</option><option value="card">Card</option><option value="none">None</option></select>
+            </label>
+            <label class="field inline-field" title="Shown under each title. You can change it per song in the tracklist."><span>Subtitle</span>
+              <select data-scene="subtitle"><option value="none">None</option><option value="genre">Genre</option><option value="mood">Mood</option><option value="language">Language</option></select>
+            </label>
+          </div>
         </div>
       </section>
 

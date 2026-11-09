@@ -266,22 +266,49 @@ def intro_overlay(W: int, H: int, title: str, songs: int, duration_label: str, s
     return img
 
 
-def now_playing_card(width: int, height: int, index: int, total: int, title: str, tags: str, accent) -> Image.Image:
-    """Translucent card with an accent bar, kicker, title and tags; sized to its content."""
+def now_playing_card(width: int, height: int, index: int, total: int, title: str, subtitle: str, accent) -> Image.Image:
+    """Card style: translucent box with an accent bar, kicker, title and optional subtitle.
+
+    The box sits at the bottom of the canvas and is shorter when there is no subtitle.
+    """
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     kf = font("medium", 21, "NOW PLAYING")
     tf = fit("semibold", title, width - 120, 50, 30)
-    gf = font("medium", 22, tags)
-    tw = max(text_width(title, tf), text_width(tags, gf) if tags else 0, 320)
+    gf = font("medium", 22, subtitle)
+    tw = max(text_width(title, tf), text_width(subtitle, gf) if subtitle else 0, 320)
     box_w = int(min(width, tw + 96))
+    box_h = height if subtitle else min(height, 122)
+    y0 = height - box_h
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, box_w, height], radius=14, fill=(8, 8, 16, 170))
-    d.rounded_rectangle([0, 0, 6, height], radius=3, fill=accent)
+    d.rounded_rectangle([0, y0, box_w, height], radius=14, fill=(8, 8, 16, 170))
+    d.rounded_rectangle([0, y0, 6, height], radius=3, fill=accent)
     x = 34
-    spaced(d, (x, 22), f"NOW PLAYING  ·  {index:02d} / {total:02d}", kf, accent + (255,), 0.1)
-    d.text((x, 54), title, font=tf, fill=PAPER + (255,))
-    if tags:
-        d.text((x, height - 46), tags[:90], font=gf, fill=MUTED + (255,))
+    spaced(d, (x, y0 + 22), f"NOW PLAYING  ·  {index:02d} / {total:02d}", kf, accent + (255,), 0.1)
+    d.text((x, y0 + 54), title, font=tf, fill=PAPER + (255,))
+    if subtitle:
+        d.text((x, height - 46), subtitle[:90], font=gf, fill=MUTED + (255,))
+    return img
+
+
+def minimal_card(width: int, height: int, index: int, title: str, subtitle: str, accent) -> Image.Image:
+    """Minimal style: track number and title with a soft shadow, no box, bottom-aligned."""
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    nf = font("semibold", 42, "00")
+    num = f"{index:02d}"
+    nw = text_width(num, nf)
+    gap = 26
+    tf = fit("semibold", title, width - int(nw) - gap - 40, 58, 34)
+    sf = font("medium", 27, subtitle)
+    title_y = 18 if subtitle else height - 82
+    # number shares the title's baseline area; accent colour, no letter-spacing
+    num_y = title_y + max(0, (tf.size - nf.size) * 0.55)
+    shadow_text(img, (0, num_y), num, nf, fill=accent + (255,), blur=8, offset=(0, 3), alpha=170)
+    d = ImageDraw.Draw(img)
+    bar_x = int(nw + gap / 2) - 1
+    d.rounded_rectangle([bar_x, title_y + 8, bar_x + 2, title_y + tf.size + 2], radius=1, fill=(255, 255, 255, 120))
+    shadow_text(img, (nw + gap, title_y), title, tf, fill=PAPER + (255,), blur=10, offset=(0, 3), alpha=175)
+    if subtitle:
+        shadow_text(img, (nw + gap, title_y + tf.size + 14), subtitle[:90], sf, fill=(230, 232, 242, 255), blur=8, offset=(0, 2), alpha=165)
     return img
 
 

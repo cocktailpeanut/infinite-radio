@@ -17,7 +17,9 @@ from PIL import Image, ImageDraw
 from engine import APP_DIR
 from mixer import format_timestamp, mix_tracks
 from scene import FPS, H, W, MOOD_PALETTES, Scene, find_ffmpeg
-from typo import accent_from_palette, intro_overlay, lockup, now_playing_card, poster
+from genre import derive_genre
+from lyricwriter import LANGUAGE_NAMES
+from typo import accent_from_palette, intro_overlay, lockup, minimal_card, now_playing_card, poster
 
 DATA_DIR = APP_DIR / "data"
 OUTPUT_DIR = APP_DIR / "output"
@@ -95,6 +97,10 @@ class EpisodeRenderer:
                 "track_id": lib["id"],
                 "title": (t.get("display_title") or lib["title"])[:80],
                 "style": lib.get("style", ""),
+                "mood": lib.get("mood"),
+                "genre": lib.get("genre", ""),
+                "language": lib.get("language"),
+                "subtitle": t.get("subtitle"),  # per-song override from the tracklist editor ("" hides it)
                 "duration": lib.get("duration"),
                 "start": None,
             })
@@ -118,6 +124,8 @@ class EpisodeRenderer:
             "outputs": {},
             "duration": None,
             "error": None,
+            # On-screen titles, captured now so later setting changes don't alter a queued render.
+            "display": {k: self.scene.snapshot()["settings"].get(k, d) for k, d in (("title_style", "minimal"), ("subtitle", "none"))},
         }
         with self.lock:
             self.jobs.insert(0, job)
@@ -244,6 +252,22 @@ class EpisodeRenderer:
     CARD_Y = H - 232
 
     @staticmethod
+    def subtitle_for(t: dict, source: str) -> str:
+        """Line under a song title: per-song override first, then the chosen source. Never the style prompt."""
+        if t.get("subtitle") is not None:
+            return str(t["subtitle"]).strip()
+        if source == "genre":
+            return (t.get("genre") or derive_genre(t.get("style", ""), set(LANGUAGE_NAMES))).strip()
+        if source == "mood":
+            return (t.get("mood") or "").strip().capitalize()
+        if source == "language":
+            if t.get("language"):
+                return t["language"]
+            first = (t.get("style") or "").split(",")[0].strip().lower()
+            return LANGUAGE_NAMES.get(first, "")
+        return ""
+
+    @staticmethod
     def _accent(job: dict) -> tuple[int, int, int]:
         return accent_from_palette(MOOD_PALETTES.get(job.get("mood", "dreamy"), MOOD_PALETTES["dreamy"]))
 
@@ -282,9 +306,17 @@ class EpisodeRenderer:
             out.putalpha(out.getchannel("A").point(lambda v: int(v * alpha)))
             return out
 
+        # Jobs queued before display settings existed keep the old Card look, minus the prompt line.
+        display = job.get("display") or {"title_style": "card", "subtitle": "none"}
+        title_style = display.get("title_style", "minimal")
         for i, t in enumerate(tracks):
-            tags = " · ".join([x.strip() for x in t.get("style", "").split(",")[1:5] if x.strip()])
-            base = now_playing_card(self.CARD_W, self.CARD_H, i + 1, n, t["title"], tags, accent)
+            if title_style == "none":
+                break  # no per-song titles; the trailing empty segment below covers the whole episode
+            sub = self.subtitle_for(t, display.get("subtitle", "none"))
+            if title_style == "card":
+                base = now_playing_card(self.CARD_W, self.CARD_H, i + 1, n, t["title"], sub, accent)
+            else:
+                base = minimal_card(self.CARD_W, self.CARD_H, i + 1, t["title"], sub, accent)
             start = t["start"] if i else INTRO_SECONDS
             end = tracks[i + 1]["start"] if i + 1 < n else total
             if end - start <= 2.0:

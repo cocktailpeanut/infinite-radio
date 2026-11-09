@@ -12,7 +12,8 @@ from pathlib import Path
 
 from engine import APP_DIR, AudioCppEngine, EngineError
 from lyrics import LyricGenerator, instrumental_title
-from lyricwriter import LANGUAGES, LyricWriter, Written, apply_language
+from genre import derive_genre
+from lyricwriter import LANGUAGE_NAMES, LANGUAGES, LyricWriter, Written, apply_language
 
 DATA_DIR = APP_DIR / "data"
 OUTPUT_DIR = APP_DIR / "output"
@@ -79,6 +80,20 @@ class Library:
                 self.tracks = json.loads(LIBRARY_FILE.read_text(encoding="utf-8"))
             except Exception:
                 self.tracks = []
+        # Backfill display metadata for songs made before it was stored (genre from the style prompt,
+        # language from the leading language name the app prepends to the style).
+        changed = False
+        for t in self.tracks:
+            if "genre" not in t:
+                t["genre"] = derive_genre(t.get("style", ""), set(LANGUAGE_NAMES)); changed = True
+            if "language" not in t:
+                first = (t.get("style") or "").split(",")[0].strip().lower()
+                t["language"] = LANGUAGE_NAMES.get(first); changed = True
+        if changed:
+            try:
+                self._save()
+            except Exception:
+                pass
 
     def _save(self) -> None:
         tmp = LIBRARY_FILE.with_suffix(".tmp")
@@ -378,7 +393,7 @@ class Radio:
             else:
                 time.sleep(10)
 
-    def _build(self, job: dict) -> tuple[str, str, str, dict]:
+    def _build(self, job: dict) -> tuple[str, str, str, dict, dict]:
         s = dict(self.settings)
         language = s.get("language", "English")
         style = apply_language(s["style"], language)
@@ -407,7 +422,7 @@ class Radio:
             "semantic_max_tokens": int(target * SEMANTIC_FPS),
             "semantic_min_tokens": int(max(200, target * SEMANTIC_FPS * 0.5)),
         }
-        return lyrics, style, title, options
+        return lyrics, style, title, options, {"genre": derive_genre(style, set(LANGUAGE_NAMES)), "language": language}
 
     _ROMAN = ["II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
 
@@ -423,7 +438,7 @@ class Radio:
         return f"{title} {uuid.uuid4().hex[:4]}"
 
     def _run_job(self, job: dict) -> None:
-        lyrics, style, title, options = self._build(job)
+        lyrics, style, title, options, meta_in = self._build(job)
         track_id = uuid.uuid4().hex[:12]
         with self.lock:
             self.current = {
@@ -448,6 +463,8 @@ class Radio:
             "style": style,
             "lyrics": lyrics,
             "mood": self.settings.get("mood"),
+            "genre": meta_in.get("genre", ""),
+            "language": meta_in.get("language", "English"),
             "seed": options["seed"],
             "cot": options["cot"],
             "duration": round(duration, 2),

@@ -142,6 +142,21 @@ songs for a target length, or use **Select** in the Library to pick songs by han
 | GIF, MP4, WebM, MOV loop | Fitted to 16:9, frame rate normalized, embedded audio dropped, optional ping-pong; grain and vignette available |
 | nothing | A mood-colored title card |
 
+**Song titles** on screen (Scene panel, applies to the live stage and to episodes):
+
+| Song titles | Look |
+|---|---|
+| Minimal (default) | Track number and title in the lower left with a soft shadow, no box |
+| Card | Translucent box with "Now playing", number and title |
+| None | No titles on screen; the YouTube chapters carry them |
+
+An optional **subtitle** line can show the song's genre, mood or lyric language. It is never
+the style prompt: the genre is extracted from the prompt with artist references ("X style",
+"like X") and mix notes removed, so "james blake style slow minimal dubstep, heavy sub-bass"
+shows as "minimal dubstep". Every subtitle can be edited or cleared per song in the tracklist.
+The settings are captured when you press Render, so changing them later does not affect a
+queued episode.
+
 Each episode lands in `app/output/episodes/<name>/`:
 
 ```
@@ -203,15 +218,15 @@ Base URL: the address shown in the Pinokio terminal (for example
 | POST | `/api/sets/start` `{name}` | Open a DJ set (turns the station on) |
 | POST | `/api/sets/cut` `{track_id?}`, `/api/sets/undo`, `/api/sets/close` | Cut the playing song, undo the last cut, close the set |
 | GET | `/api/sets`, `/api/sets/current`, `/api/sets/{id}` | List sets, the open set, one set with its tracklist |
-| PUT | `/api/sets/{id}` `{name, tracks:[{track_id, display_title}]}` | Reorder, remove or rename kept songs |
+| PUT | `/api/sets/{id}` `{name, tracks:[{track_id, display_title, subtitle?}]}` | Reorder, remove or rename kept songs; `subtitle` overrides the on-screen subtitle (`""` hides it) |
 | POST | `/api/sets/{id}/render` `{crossfade}` | Render a closed set as an episode |
 | POST | `/api/player/ended` `{track_id}` | Tell an open set a song played through (the web player does this) |
 | GET | `/api/episodes/suggest?source=bookmarked\|recent&minutes=60&order=chronological\|shuffled` | Suggested tracklist from the library |
-| POST | `/api/episodes` `{name, tracks:[{track_id, display_title}], crossfade}` | Render a custom tracklist |
+| POST | `/api/episodes` `{name, tracks:[{track_id, display_title, subtitle?}], crossfade}` | Render a custom tracklist |
 | GET | `/api/episodes`, `/api/episodes/{id}` | Render jobs with status, step and progress |
 | GET | `/api/episodes/{id}/file`, `/thumbnail`, `/description` | Outputs (`?download=1` for attachments) |
 | POST | `/api/episodes/{id}/cancel`, DELETE `/api/episodes/{id}` | Cancel a render, delete an episode and its files |
-| GET | `/api/scene`, PUT `/api/scene` | Scene settings (`camera`, `weather`, `weather_density`, `fog`, `flicker`, `grain`, `vignette`, `pingpong`, `loop_seconds`) |
+| GET | `/api/scene`, PUT `/api/scene` | Scene settings (`camera`, `weather`, `weather_density`, `fog`, `flicker`, `grain`, `vignette`, `pingpong`, `loop_seconds`, `hw_encode`, `title_style` = minimal\|card\|none, `subtitle` = none\|genre\|mood\|language) |
 | POST | `/api/scene/upload` (multipart `file`), DELETE `/api/scene`, GET `/api/scene/preview` | Set, clear or view the scene file |
 
 ### curl
