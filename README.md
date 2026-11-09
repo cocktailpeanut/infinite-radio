@@ -29,10 +29,11 @@ songs back to back while you listen. No cloud APIs, no accounts, no telemetry.
   keep it docked beside the player. Lyrics open as a column over the picture.
 - **Keyboard.** Space play/pause, `n` or → skip, `b` bookmark, `s` station,
   `q` up next, `e` episodes, `l` lyrics, `v` scene or visualizer, `f` full screen,
-  Esc closes panels.
-- **DJ sets.** Press **Start a set** and everything that plays through joins the set;
-  skip to cut a song, save the station to open a new section, request a track as a
-  guest spot. Close the set, tidy the tracklist, and render it.
+  Esc closes panels. In a set: `k` or → keep, `x` or ← cut, `n` leave for review.
+- **DJ sets.** Press **Start a set**, then **Keep** or **Cut** each song; either one
+  moves on to the next. Songs that play to the end are kept (or left for review, your
+  choice). Save the station to open a new section, request a track as a guest spot.
+  Close the set, settle anything undecided, tidy the tracklist, and render it.
 - **Episodes.** Any set or library selection becomes a YouTube-ready folder: a 1080p
   MP4 with crossfaded audio, your scene image or loop as the visual, title cards per
   song, a thumbnail PNG, and a description with chapter timestamps.
@@ -119,7 +120,7 @@ infinite_radio/
 │   ├── engine.py        # supervises audiocpp_server, runs generations
 │   ├── lyrics.py        # offline template lyric writer (fallback)
 │   ├── lyricwriter.py   # llama.cpp lyric writer (schema-constrained)
-│   ├── sets.py          # DJ set state (kept, cut, sections)
+│   ├── sets.py          # DJ set state (verdicts, sections)
 │   ├── mixer.py         # crossfade mixer with exact chapter times
 │   ├── scene.py         # image/GIF/video -> seamless 1080p loop
 │   ├── episodes.py      # render jobs: cards, ffmpeg pass, outputs
@@ -141,11 +142,24 @@ infinite_radio/
 
 **Start a set** from the top bar (or the off-air screen). While it is open, a pill at
 the top shows a clock, songs kept and songs cut, and the player shows titles the way
-the episode will (numbered, in your chosen title style). Skip turns into a cut button
-(scissors, or `n`): it cuts the current song from the set and plays the next; a toast
-offers Undo. Saving the station mid-set records a new section so you
-can shape an arc from mellow to energetic. **Close set** opens the tracklist: reorder,
-remove, rename, choose a crossfade, then **Render episode**.
+the episode will (numbered, in your chosen title style).
+
+In a set, Skip becomes two buttons on either side of play:
+
+- **Keep** (✓, `k` or →) puts the song in the set and plays the next one.
+- **Cut** (scissors, `x` or ←) drops it and plays the next one.
+
+A toast offers the opposite verdict for a few seconds in case you pressed the wrong
+one. A song that plays to the end follows the set's **Played to the end** rule, chosen
+when you start the set: *Keep the song* (default) or *Leave it for review*. A song you
+move past without a verdict (`n`, reloading the page, closing the set mid-song) is left
+for review too, so nothing is silently kept or lost.
+
+Saving the station mid-set records a new section so you can shape an arc from mellow to
+energetic. **Close set** opens the tracklist in the order the songs played. Undecided
+songs are marked; keep (✓) or cut (✕) each one, or use **Keep all** / **Cut all**.
+Render stays locked until nothing is undecided. Then reorder, rename, choose a
+crossfade and **Render episode**.
 
 **Build from library** (Episodes tab) suggests a tracklist from bookmarked or recent
 songs for a target length, or use **Select** in the Library to pick songs by hand.
@@ -241,7 +255,7 @@ Base URL: the address shown in the Pinokio terminal (for example
 | GET | `/api/status` | Station state, settings, ready queue, current job (phase, elapsed, ETA), engine info, stats |
 | GET | `/api/station` / PUT `/api/station` | Read / update station settings (`style`, `mood`, `lyric_mode`, `themes`, `language`, `target_seconds`, `planning`, `lookahead`, `quality_steps`) |
 | POST | `/api/station/on`, `/api/station/off` | Turn the generator on or off |
-| GET | `/api/next` | Pop the next ready song (`track` is `null` while buffering) |
+| GET | `/api/next?ended={id}` | Pop the next ready song (`track` is `null` while buffering). `ended` names the song that just played to the end, so an open set applies its play-through rule |
 | POST | `/api/requests` | Queue your own lyrics `{lyrics, title?, style?}` |
 | DELETE | `/api/requests/{id}` | Remove a pending request |
 | GET | `/api/library?liked=1` | All songs, newest first (`liked=1` returns bookmarked songs only) |
@@ -252,12 +266,14 @@ Base URL: the address shown in the Pinokio terminal (for example
 | DELETE | `/api/tracks/{id}` | Delete a song and its WAV |
 | GET | `/api/presets` | Style presets, moods, and languages with their tier |
 | GET | `/api/engine/log`, POST `/api/engine/restart` | audio.cpp log tail / restart |
-| POST | `/api/sets/start` `{name}` | Open a DJ set (turns the station on) |
-| POST | `/api/sets/cut` `{track_id?}`, `/api/sets/undo`, `/api/sets/close` | Cut the playing song, undo the last cut, close the set |
+| POST | `/api/sets/start` `{name, planned_minutes?, play_through?}` | Open a DJ set (turns the station on). `play_through`: `keep` (default) or `review` |
+| POST | `/api/sets/verdict` `{track_id?, verdict}` | `keep`, `cut` or `review` a song in the open set (the playing one when `track_id` is omitted). A song that began before the set started is added |
+| POST | `/api/sets/keep` / `/api/sets/cut` `{track_id?}` | Shortcuts for the two verdicts |
+| POST | `/api/sets/undo`, `/api/sets/close` | Revert the last verdict; close the set (a song still playing goes to review) |
 | GET | `/api/sets`, `/api/sets/current`, `/api/sets/{id}` | List sets, the open set, one set with its tracklist |
 | PUT | `/api/sets/{id}` `{name, tracks:[{track_id, display_title, subtitle?}]}` | Reorder, remove or rename kept songs; `subtitle` overrides the on-screen subtitle (`""` hides it) |
-| POST | `/api/sets/{id}/render` `{crossfade}` | Render a closed set as an episode |
-| POST | `/api/player/ended` `{track_id}` | Tell an open set a song played through (the web player does this) |
+| POST | `/api/sets/{id}/render` `{crossfade}` | Render a closed set as an episode (409 while songs are undecided) |
+| POST | `/api/player/ended` `{track_id}` | Older way to report a song that played to the end; `/api/next?ended=` does it in the same request |
 | GET | `/api/episodes/suggest?source=bookmarked\|recent&minutes=60&order=chronological\|shuffled` | Suggested tracklist from the library |
 | POST | `/api/episodes` `{name, tracks:[{track_id, display_title, subtitle?}], crossfade}` | Render a custom tracklist |
 | GET | `/api/episodes`, `/api/episodes/{id}` | Render jobs with status, step and progress |
@@ -299,6 +315,12 @@ curl -o episode.mp4 "$BASE/api/episodes/$JOB/file"
 curl $BASE/api/status | jq '.current, .ready[].title'
 ID=$(curl -s $BASE/api/next | jq -r '.track.id')
 curl -o song.wav "$BASE/api/tracks/$ID/audio"
+
+# a DJ set: keep or cut the playing song, then close and render
+curl -X POST $BASE/api/sets/start -H 'Content-Type: application/json' -d '{"name":"Friday","play_through":"review"}'
+curl -X POST $BASE/api/sets/verdict -H 'Content-Type: application/json' -d '{"verdict":"keep"}'
+SET=$(curl -s -X POST $BASE/api/sets/close | jq -r .id)
+curl -X POST $BASE/api/sets/$SET/render -H 'Content-Type: application/json' -d '{"crossfade":2}'
 ```
 
 ### Python

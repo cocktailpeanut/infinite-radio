@@ -53,7 +53,17 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Infinite Radio", version="1.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+class FreshStatic(StaticFiles):
+    """The UI files change with every update. Revalidate them on each load (a cheap
+    304 when unchanged) so a browser never pairs a new page with an old script."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", FreshStatic(directory=str(STATIC_DIR)), name="static")
 
 # Keep Spotlight from indexing gigabytes of generated media and model files (macOS; harmless elsewhere).
 for _d in (APP_DIR / "output", APP_DIR / "models", APP_DIR / "data", APP_DIR / "bin"):
@@ -107,6 +117,12 @@ class SongRequest(BaseModel):
 class SetStart(BaseModel):
     name: str | None = None
     planned_minutes: int | None = 0
+    play_through: str | None = "keep"  # what a song that plays to the end becomes: keep | review
+
+
+class SetVerdict(BaseModel):
+    track_id: str | None = None  # None = the song that is playing
+    verdict: str                 # keep | cut | review
 
 
 class SetCut(BaseModel):
@@ -173,7 +189,7 @@ class PlayerEvent(BaseModel):
 # ---------- pages ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
 
 
 # ---------- status ----------
@@ -188,10 +204,11 @@ def status():
     st = radio.status()
     cur = sets.current()
     if cur:
-        kept = [e for e in cur["tracks"] if e["state"] in ("kept", "playing")]
-        cur = {"id": cur["id"], "name": cur["name"], "started_at": cur["started_at"], "kept": len(kept),
-               "planned_minutes": cur.get("planned_minutes", 0),
-               "cut": sum(1 for e in cur["tracks"] if e["state"] == "cut"), "sections": len(cur["sections"]),
+        c = sets.counts(cur)
+        cur = {"id": cur["id"], "name": cur["name"], "started_at": cur["started_at"],
+               "kept": c["kept"], "cut": c["cut"], "review": c["review"], "playing": c["playing"],
+               "play_through": cur.get("play_through", "keep"),
+               "planned_minutes": cur.get("planned_minutes", 0), "sections": len(cur["sections"]),
                "tracks": cur["tracks"][-12:]}
     st["set"] = cur
     active = [j for j in episodes.all() if j["status"] not in ("done", "error")]
@@ -252,7 +269,11 @@ def station_off():
 
 
 @app.get("/api/next")
-def next_track():
+def next_track(ended: str | None = None):
+    # `ended` = the song that just played to the end. Applying its play-through
+    # verdict here, in the same request, means it can never race the next song.
+    if ended:
+        sets.on_ended(ended)
     track = radio.next_track()
     if track:
         sets.on_next(track)
@@ -353,7 +374,7 @@ def start_set(body: SetStart):
     if not ok:
         raise HTTPException(409, why)
     try:
-        s = sets.start(body.name or "", radio.settings, body.planned_minutes or 0)
+        s = sets.start(body.name or "", radio.settings, body.planned_minutes or 0, body.play_through or "keep")
     except ValueError as e:
         raise HTTPException(409, str(e))
     radio.set_on(True)
@@ -368,9 +389,30 @@ def cut_set(body: SetCut):
     return e
 
 
+@app.post("/api/sets/keep")
+def keep_set(body: SetCut):
+    e = sets.verdict(body.track_id, "keep", library.get(body.track_id) if body.track_id else None)
+    if not e:
+        raise HTTPException(404, "nothing to keep")
+    return e
+
+
+@app.post("/api/sets/verdict")
+def set_verdict(body: SetVerdict):
+    # A song that was already playing when the set started has no entry yet;
+    # passing its library record lets the verdict add it.
+    try:
+        e = sets.verdict(body.track_id, body.verdict, library.get(body.track_id) if body.track_id else None)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    if not e:
+        raise HTTPException(404, "no such song in the open set")
+    return e
+
+
 @app.post("/api/sets/undo")
 def undo_cut():
-    e = sets.undo_cut()
+    e = sets.undo()
     if not e:
         raise HTTPException(404, "nothing to undo")
     return e
@@ -423,6 +465,9 @@ def render_set(set_id: str, body: RenderRequest):
         raise HTTPException(404, "set not found")
     if s["status"] == "open":
         raise HTTPException(409, "close the set before rendering")
+    undecided = sum(1 for e in s["tracks"] if e["state"] in ("review", "playing"))
+    if undecided:
+        raise HTTPException(409, f"{undecided} song{'s' if undecided != 1 else ''} still need a decision; keep or cut them in the tracklist first")
     kept = [{"track_id": e["track_id"], "display_title": e.get("display_title"), "subtitle": e.get("subtitle")}
             for e in s["tracks"] if e["state"] == "kept"]
     try:

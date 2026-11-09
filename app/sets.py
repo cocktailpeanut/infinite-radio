@@ -1,7 +1,11 @@
 """DJ Set mode.
 
-A set is a listening session that becomes an episode. Every song that plays
-through while the set is open is added; songs the listener cuts are dropped.
+A set is a listening session that becomes an episode. Each song gets a
+verdict: kept (in the episode), cut (dropped) or review (undecided, settled in
+the tracklist before rendering). The listener gives verdicts with Keep and Cut,
+which also move on to the next song. A song that plays to the end gets the
+set's play-through verdict (keep by default, or review), and a song that is
+interrupted without a verdict (page reload, closing mid-song) goes to review.
 Style or mood changes during the set are recorded as sections.
 """
 
@@ -18,6 +22,8 @@ from engine import APP_DIR
 
 DATA_DIR = APP_DIR / "data"
 SETS_FILE = DATA_DIR / "sets.json"
+VERDICT_STATE = {"keep": "kept", "cut": "cut", "review": "review"}
+PLAY_THROUGH = ("keep", "review")
 
 
 def slugify(text: str) -> str:
@@ -52,7 +58,7 @@ class SetManager:
         return next((s for s in self.sets if s.get("status") == "open"), None)
 
     # ---------- lifecycle ----------
-    def start(self, name: str, station: dict, planned_minutes: int = 0) -> dict:
+    def start(self, name: str, station: dict, planned_minutes: int = 0, play_through: str = "keep") -> dict:
         with self.lock:
             if self._open():
                 raise ValueError("a set is already open")
@@ -64,11 +70,13 @@ class SetManager:
                 "status": "open",
                 "started_at": time.time(),
                 "closed_at": None,
-                "tracks": [],      # entries: {track_id, title, display_title, started_at, state: playing|kept|cut, cut_at}
+                "tracks": [],      # entries: {track_id, title, display_title, started_at, state: playing|kept|cut|review}
                 "sections": [{"at": time.time(), "style": station.get("style"), "mood": station.get("mood"), "label": "Opening"}],
                 "requests": 0,
                 "episode_id": None,
                 "planned_minutes": int(max(0, min(360, planned_minutes or 0))),
+                "play_through": play_through if play_through in PLAY_THROUGH else "keep",
+                "history": [],     # verdict log for undo: {track_id, prev, at}
             }
             self.sets.insert(0, s)
             self._save()
@@ -89,70 +97,104 @@ class SetManager:
             return [dict(s) for s in self.sets]
 
     # ---------- playback events ----------
+    @staticmethod
+    def counts(s: dict) -> dict:
+        c = {"kept": 0, "cut": 0, "review": 0, "playing": 0}
+        for e in s["tracks"]:
+            c[e["state"]] = c.get(e["state"], 0) + 1
+        return c
+
+    @staticmethod
+    def _entry(track: dict, state: str) -> dict:
+        return {
+            "track_id": track["id"],
+            "title": track["title"],
+            "display_title": track["title"],
+            "duration": track.get("duration"),
+            "started_at": time.time(),
+            "state": state,
+            "kind": track.get("kind", "auto"),
+        }
+
     def on_next(self, track: dict) -> None:
-        """A new song starts playing. The previous unresolved song is kept."""
+        """A new song starts playing. A previous song still marked playing was
+        interrupted without a verdict, so it goes to review."""
         with self.lock:
             s = self._open()
             if not s:
                 return
             for e in s["tracks"]:
                 if e["state"] == "playing":
-                    e["state"] = "kept"
-            s["tracks"].append({
-                "track_id": track["id"],
-                "title": track["title"],
-                "display_title": track["title"],
-                "duration": track.get("duration"),
-                "started_at": time.time(),
-                "state": "playing",
-                "kind": track.get("kind", "auto"),
-            })
+                    e["state"] = "review"
+            s["tracks"].append(self._entry(track, "playing"))
             if track.get("kind") == "request":
                 s["requests"] += 1
             self._save()
 
     def on_ended(self, track_id: str) -> None:
+        """The song played to the end: apply the set's play-through verdict."""
         with self.lock:
             s = self._open()
             if not s:
                 return
             for e in reversed(s["tracks"]):
                 if e["track_id"] == track_id and e["state"] == "playing":
-                    e["state"] = "kept"
+                    e["state"] = "kept" if s.get("play_through", "keep") == "keep" else "review"
                     break
             self._save()
 
-    def cut(self, track_id: str | None = None) -> dict | None:
-        """Drop the song that is playing (or the given one) from the set."""
+    def verdict(self, track_id: str | None, verdict: str, track: dict | None = None) -> dict | None:
+        """Keep, cut or send to review the playing song (track_id None) or a given one.
+
+        Works on the open set; returns the updated entry, or None if there is no match.
+        `track` is the library record of a song that began before the set started:
+        it has no entry yet, so the verdict adds one."""
+        state = VERDICT_STATE.get(verdict)
+        if not state:
+            raise ValueError("verdict must be keep, cut or review")
         with self.lock:
             s = self._open()
             if not s:
                 return None
             target = None
             for e in reversed(s["tracks"]):
-                if (track_id is None and e["state"] == "playing") or (track_id and e["track_id"] == track_id and e["state"] != "cut"):
+                if (track_id is None and e["state"] == "playing") or (track_id and e["track_id"] == track_id):
                     target = e
                     break
+            if not target and track and track.get("id") == track_id:
+                target = self._entry(track, "playing")
+                s["tracks"].append(target)
             if not target:
                 return None
-            target["state"] = "cut"
-            target["cut_at"] = time.time()
+            hist = s.setdefault("history", [])
+            hist.append({"track_id": target["track_id"], "prev": target["state"], "at": time.time()})
+            del hist[:-50]
+            target["state"] = state
+            target["decided_at"] = time.time()
             self._save()
             return dict(target)
 
-    def undo_cut(self) -> dict | None:
+    def cut(self, track_id: str | None = None) -> dict | None:
+        """Drop the song that is playing (or the given one) from the set."""
+        return self.verdict(track_id, "cut")
+
+    def undo(self) -> dict | None:
+        """Revert the most recent verdict. A song that was playing when it got its
+        verdict has moved on since, so it returns to review rather than playing."""
         with self.lock:
             s = self._open()
-            if not s:
+            if not s or not s.get("history"):
                 return None
-            cuts = [e for e in s["tracks"] if e["state"] == "cut"]
-            if not cuts:
+            last = s["history"].pop()
+            e = next((x for x in reversed(s["tracks"]) if x["track_id"] == last["track_id"]), None)
+            if not e:
                 return None
-            last = max(cuts, key=lambda e: e.get("cut_at", 0))
-            last["state"] = "kept"
-            last.pop("cut_at", None)
+            e["state"] = "review" if last["prev"] == "playing" else last["prev"]
             self._save()
-            return dict(last)
+            return dict(e)
+
+    # Back-compat name for the old endpoint.
+    undo_cut = undo
 
     def steer(self, station: dict, label: str | None = None) -> None:
         """Record a style/mood change as a new section."""
@@ -175,8 +217,8 @@ class SetManager:
             if not s:
                 return None
             for e in s["tracks"]:
-                if e["state"] == "playing":
-                    e["state"] = "kept"
+                if e["state"] == "playing":  # closed mid-song: let the tracklist decide
+                    e["state"] = "review"
             s["status"] = "closed"
             s["closed_at"] = time.time()
             self._save()

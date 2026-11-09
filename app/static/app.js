@@ -216,7 +216,7 @@
     const style = inSet ? ((sc && sc.settings && sc.settings.title_style) || "minimal") : "minimal";
     $("np").className = `np style-${style}`;
     $("np-n").hidden = !inSet;
-    if (inSet) $("np-n").textContent = String(Math.max(1, state.set.kept || 0)).padStart(2, "0");
+    if (inSet) $("np-n").textContent = String((state.set.kept || 0) + 1).padStart(2, "0");  // its place if kept
     let sub = "";
     if (t) {
       const src = inSet ? ((sc && sc.settings && sc.settings.subtitle) || "none") : "genre";
@@ -226,10 +226,8 @@
   };
   const renderNowPlaying = () => {
     const t = state.track, like = $("btn-like"), dl = $("btn-download"), skip = $("btn-skip");
-    const inSet = !!state.set;
-    skip.classList.toggle("cut", inSet);
-    skip.title = inSet ? "Cut from the set, skips too (N)" : "Skip (N)";
     body.classList.toggle("has-track", !!t);
+    for (const id of ["btn-keep", "btn-cut"]) $(id).setAttribute("aria-disabled", t ? "false" : "true");
     if (!t) {
       $("np-kicker").textContent = state.listening ? (state.buffering ? "Buffering" : "On air") : "Nothing playing";
       $("np-title").textContent = state.listening ? "Your first song is being composed…" : "Tune in to start the station";
@@ -369,6 +367,7 @@
     $("setbar-name").textContent = s.name;
     $("setbar-kept").textContent = `${s.kept} kept`;
     $("setbar-cut").textContent = `${s.cut} cut`;
+    $("setbar-review").textContent = s.review ? ` · ${s.review} to review` : "";
     const el = Math.max(0, Date.now() / 1000 - s.started_at);
     $("setbar-clock").textContent = fmt(el).padStart(5, "0");
     const plan = Number(s.planned_minutes || 0);
@@ -424,14 +423,15 @@
   $("su-scene-clear").onclick = async () => { state.scene = await api("/api/scene", { method: "DELETE" }); renderScene(); renderSetup(); renderStage(true); };
   $("su-start").onclick = async () => {
     const name = $("su-name").value.trim();
-    const planned_minutes = Number($("su-length").value);
+    const planned_minutes = Number($("su-length").value), play_through = $("su-through").value;
     try {
       if (state.settingsDirty) await saveSettings();
-      await api("/api/sets/start", { method: "POST", body: { name, planned_minutes } });
+      await api("/api/sets/start", { method: "POST", body: { name, planned_minutes, play_through } });
       state.setup = false; renderSetup();
       await refresh();
       if (!state.listening) await tuneIn();
-      toast("Set started. Everything that plays through is in; skip to cut.", true);
+      toast(play_through === "keep" ? "Set started. Keep (K) or Cut (X) moves on; songs that play to the end are kept."
+        : "Set started. Keep (K) or Cut (X) moves on; songs that play to the end wait for review.", true);
     } catch (e) { toast(e.message); }
   };
   const closeSet = async () => {
@@ -505,17 +505,21 @@
     if (!ed) return;
     $("ed-heading").textContent = ed.kind === "set" ? "Set tracklist" : "Tracklist";
     $("ed-name").value = ed.name;
+    const undecided = ed.tracks.filter((t) => t.undecided).length;
+    $("ed-review").hidden = !undecided;
+    $("ed-review-text").textContent = `${undecided} song${undecided === 1 ? "" : "s"} still need${undecided === 1 ? "s" : ""} a decision: keep (✓) or cut (✕).`;
     $("ed-list").innerHTML = ed.tracks.map((t, i) => `
-      <li class="ed-row ${t.available === false ? "unavailable" : ""}" data-i="${i}">
+      <li class="ed-row ${t.available === false ? "unavailable" : ""} ${t.undecided ? "undecided" : ""}" data-i="${i}">
         <span class="num">${String(i + 1).padStart(2, "0")}</span>
         <div><input value="${esc(t.display_title)}" data-act="rename" ${t.available === false ? "disabled" : ""}>
           ${subtitleSource() !== "none" && t.available !== false ? `<input class="ed-subtitle" data-act="subtitle" value="${esc(t.subtitleEdited ? (t.subtitle || "") : subtitleFor(t, subtitleSource()))}" placeholder="no subtitle">` : ""}
-          <div class="sub">${fmt(t.duration || 0)}${t.genre ? " · " + esc(t.genre) : t.mood ? " · " + esc(t.mood) : ""}${t.available === false ? " · audio missing" : ""}</div></div>
-        <div class="ops"><button data-act="up" title="Move up">↑</button><button data-act="down" title="Move down">↓</button><button data-act="remove" title="Remove">✕</button></div>
+          <div class="sub">${fmt(t.duration || 0)}${t.genre ? " · " + esc(t.genre) : t.mood ? " · " + esc(t.mood) : ""}${t.available === false ? " · audio missing" : ""}${t.undecided ? `<span class="badge">Undecided</span>` : ""}</div></div>
+        <div class="ops">${t.undecided ? `<button data-act="keep" class="keep-op" title="Keep">✓</button>` : ""}<button data-act="up" title="Move up">↑</button><button data-act="down" title="Move down">↓</button><button data-act="remove" title="${t.undecided ? "Cut" : "Remove"}">✕</button></div>
       </li>`).join("") || `<li class="hint">No songs left. Add some from the Library or discard.</li>`;
     const total = ed.tracks.reduce((a, t) => a + (t.duration || 0), 0) - Math.max(0, ed.tracks.length - 1) * Number($("ed-xf").value);
     $("ed-total").textContent = `${ed.tracks.length} song${ed.tracks.length === 1 ? "" : "s"} · about ${fmt(total)}`;
-    $("ed-render").disabled = ed.tracks.filter((t) => t.available !== false).length === 0;
+    $("ed-render").disabled = undecided > 0 || ed.tracks.filter((t) => t.available !== false).length === 0;
+    $("ed-render").title = undecided ? "Keep or cut the undecided songs first" : "";
   };
   $("ed-list").onclick = (ev) => {
     const btn = ev.target.closest("button[data-act]"), row = ev.target.closest(".ed-row");
@@ -524,8 +528,11 @@
     if (btn.dataset.act === "up" && i > 0) [tr[i - 1], tr[i]] = [tr[i], tr[i - 1]];
     if (btn.dataset.act === "down" && i < tr.length - 1) [tr[i + 1], tr[i]] = [tr[i], tr[i + 1]];
     if (btn.dataset.act === "remove") tr.splice(i, 1);
+    if (btn.dataset.act === "keep") tr[i].undecided = false;
     renderEditor();
   };
+  $("ed-keep-all").onclick = () => { if (!state.editor) return; state.editor.tracks.forEach((t) => { t.undecided = false; }); renderEditor(); };
+  $("ed-cut-all").onclick = () => { if (!state.editor) return; state.editor.tracks = state.editor.tracks.filter((t) => !t.undecided); renderEditor(); };
   $("ed-list").addEventListener("input", (ev) => {
     const row = ev.target.closest(".ed-row");
     if (!row || !state.editor) return;
@@ -539,8 +546,10 @@
 
   const openSetEditor = async (setId) => {
     const s = await api(`/api/sets/${setId}`);
-    const kept = s.tracks.filter((e) => e.state === "kept");
+    // Kept songs and the ones still awaiting a verdict, in the order they played.
+    const kept = s.tracks.filter((e) => e.state === "kept" || e.state === "review" || e.state === "playing");
     state.editor = { kind: "set", setId, name: s.name, tracks: kept.map((e) => ({ track_id: e.track_id, display_title: e.display_title || e.title, duration: e.duration, style: e.style, available: e.available,
+      undecided: e.state !== "kept",
       mood: e.mood, genre: e.genre, language: e.language, subtitle: e.subtitle, subtitleEdited: e.subtitle !== undefined && e.subtitle !== null })) };
     renderEditor();
     $("ep-editor").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -621,9 +630,9 @@
     const closed = state.sets.filter((s) => s.status === "closed");
     $("sets-section").hidden = closed.length === 0;
     $("sets-list").innerHTML = closed.slice(0, 8).map((s) => {
-      const kept = s.tracks.filter((e) => e.state === "kept").length;
+      const n = (st) => s.tracks.filter((e) => e.state === st).length, review = n("review") + n("playing");
       return `<li class="ep-item" data-id="${s.id}">
-        <div class="ep-head"><span class="ep-name">${esc(s.name)}</span><span class="ep-status">${kept} kept · ${s.tracks.filter((e) => e.state === "cut").length} cut</span></div>
+        <div class="ep-head"><span class="ep-name">${esc(s.name)}</span><span class="ep-status">${n("kept")} kept · ${n("cut")} cut${review ? ` · ${review} to review` : ""}</span></div>
         <div class="ep-sub">${new Date(s.started_at * 1000).toLocaleString()}${s.episode_id ? " · rendered" : ""}</div>
         <div class="ep-links"><button data-act="open">Open tracklist</button><button data-act="delete" class="danger">Delete</button></div></li>`;
     }).join("");
@@ -659,7 +668,7 @@
       state.set = st.set;
       if (st.set && state.setup) { state.setup = false; }
       renderSetBar(); renderSetup(); onAmbienceStatus(st.ambience);
-      if (hadSet !== !!st.set) renderNowPlaying();
+      if (hadSet !== !!st.set) renderNowPlaying(); else if (st.set) renderTitle();  // the song number follows the kept count
       renderStage();
       applySettingsToForm(st.settings);
       renderQueue(st); renderEngine(st); renderRequests(st);
@@ -686,22 +695,38 @@
     try { ensureAudioGraph(); if (actx && actx.state === "suspended") await actx.resume(); await audio.play(); }
     catch (e) { toast("Press play to start audio (browser autoplay rule).", true); }
   };
-  const playNext = async () => {
+  // `ended` names the song that just played to the end, so the set can apply its
+  // play-through verdict in the same request that picks the next song.
+  const playNext = async (ended) => {
     if (state.pendingNext) return;
     state.pendingNext = true;
     try {
-      const r = await api("/api/next");
+      const r = await api(ended ? `/api/next?ended=${encodeURIComponent(ended)}` : "/api/next");
       if (r.track) await playTrack(r.track); else { state.track = null; setBuffering(true); }
     } catch (e) { toast(e.message); } finally { state.pendingNext = false; }
   };
-  const cutAndSkip = async () => {
+  // Keep or Cut the playing song, then move on. The toast offers the opposite
+  // verdict, in case the wrong button was pressed.
+  const decideAndNext = async (verdict) => {
+    if (!state.listening || !state.set || !state.track || state.pendingNext) return;
+    const t = state.track;
+    try {
+      const e = await api("/api/sets/verdict", { method: "POST", body: { track_id: t.id, verdict } });
+      const title = e.display_title || e.title || t.title, other = verdict === "keep" ? "cut" : "keep";
+      toast(verdict === "keep" ? `Kept "${title}".` : `Cut "${title}".`, true, {
+        label: verdict === "keep" ? "Cut instead" : "Keep instead",
+        run: async () => {
+          try { await api("/api/sets/verdict", { method: "POST", body: { track_id: t.id, verdict: other } }); refresh(); toast(other === "keep" ? `Kept "${title}".` : `Cut "${title}".`, true); }
+          catch (err) { toast(err.message); }
+        },
+      });
+      if (state.set) { state.set[verdict === "keep" ? "kept" : "cut"] += 1; renderSetBar(); }
+    } catch (e) { toast(e.message); return; }
+    playNext();
+  };
+  const skip = () => {
     if (!state.listening) return;
-    if (state.set && state.track) {
-      try {
-        const cut = await api("/api/sets/cut", { method: "POST", body: { track_id: state.track.id } });
-        toast(`Cut "${cut.title}" from the set.`, true, { label: "Undo", run: async () => { try { await api("/api/sets/undo", { method: "POST" }); refresh(); toast("Put it back in the set.", true); } catch (e) { toast(e.message); } } });
-      } catch (e) { /* not in set anymore */ }
-    }
+    if (state.set && state.track) toast(`Left "${state.track.title}" for review.`, true);
     playNext();
   };
 
@@ -709,8 +734,7 @@
   audio.addEventListener("waiting", () => ambSync());
   audio.addEventListener("ended", () => {
     setTimeout(ambSync, 0);
-    if (state.track && state.set) api("/api/player/ended", { method: "POST", body: { track_id: state.track.id } }).catch(() => {});
-    if (state.listening) playNext();
+    if (state.listening) playNext(state.set && state.track ? state.track.id : undefined);
     else { state.track = null; renderNowPlaying(); }  // off air and the last song ended: back to the tune-in screen
   });
   audio.addEventListener("play", () => { $("art").classList.add("playing"); $("btn-play").classList.remove("paused"); wake(); });
@@ -736,7 +760,9 @@
     if (audio.paused) { state.userPaused = false; audio.play(); } else { state.userPaused = true; audio.pause(); }
     ambSync();
   };
-  $("btn-skip").onclick = cutAndSkip;
+  $("btn-skip").onclick = skip;
+  $("btn-keep").onclick = () => decideAndNext("keep");
+  $("btn-cut").onclick = () => decideAndNext("cut");
   $("btn-like").onclick = async () => {
     if (!state.track) return;
     const t = await api(`/api/tracks/${state.track.id}/like`, { method: "POST" });
@@ -858,7 +884,9 @@
     if (e.target.matches("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (e.code === "Space") { e.preventDefault(); $("btn-play").click(); }
-    else if (k === "n" || e.key === "ArrowRight") $("btn-skip").click();
+    else if (state.set && (k === "k" || e.key === "ArrowRight")) $("btn-keep").click();
+    else if (state.set && (k === "x" || e.key === "ArrowLeft")) $("btn-cut").click();
+    else if (k === "n" || (!state.set && e.key === "ArrowRight")) skip();  // in a set, N moves on and leaves the song for review
     else if (k === "b") $("btn-like").click();
     else if (k === "s") toggleDrawer("station");
     else if (k === "q") toggleDrawer("side", "queue");

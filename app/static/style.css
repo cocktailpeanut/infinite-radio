@@ -428,10 +428,19 @@ body:not(.has-track) .dock { display: none; }
 .icon-btn.liked { color: var(--accent-2); border-color: rgba(34,211,238,0.55); box-shadow: 0 0 16px rgba(34,211,238,0.35); }
 .icon-btn.liked .bm path, .track .actions .liked .bm path { fill: currentColor; }
 .icon-btn[aria-disabled=true] { opacity: 0.35; pointer-events: none; }
-.icon-btn .i-cut { display: none; }
-.icon-btn.cut { color: #ff6b9a; border-color: rgba(244,63,122,0.5); }
-.icon-btn.cut .i-skip { display: none; }
-.icon-btn.cut .i-cut { display: block; }
+/* Set verdicts: Cut and Keep replace Skip while a set is open */
+.icon-btn.verdict { display: none; position: relative; }
+body.in-set .icon-btn.verdict { display: inline-flex; }
+body.in-set #btn-skip { display: none; }
+.icon-btn.verdict::after {
+  content: attr(data-label); position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 5px;
+  font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); pointer-events: none; white-space: nowrap;
+}
+.icon-btn.cut-btn { color: #ff8fb0; border-color: rgba(244,63,122,0.45); }
+.icon-btn.cut-btn:hover { background: rgba(244,63,122,0.16); }
+.icon-btn.keep-btn { color: #7af0c4; border-color: rgba(52,211,153,0.5); }
+.icon-btn.keep-btn:hover { background: rgba(52,211,153,0.16); }
+.icon-btn.keep-btn .ico { stroke-width: 2.4; }
 .play-btn {
   width: 64px; height: 64px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
   background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0a0a14;
@@ -535,6 +544,7 @@ details.more summary { cursor: pointer; color: var(--muted); font-size: 12.5px; 
   .np, body.lyrics-open .np { max-width: calc(100% - 32px); }
   .np-meta { display: none; }
   .transport { gap: 14px; }
+  body.in-set .transport { gap: 9px; }  /* five buttons in a set; keep clear of the next chip */
   .icon-btn { width: 42px; height: 42px; }
   .play-btn { width: 58px; height: 58px; }
   .next-chip { padding: 6px; }
@@ -583,3 +593,16 @@ details.more summary { cursor: pointer; color: var(--muted); font-size: 12.5px; 
 .warn-text { color: #ffb4b4 !important; }
 .scene-titles { display: flex; flex-wrap: wrap; gap: 8px 14px; width: 100%; padding-top: 8px; border-top: 1px solid var(--panel-border); margin-top: 4px; }
 .ed-row .ed-subtitle { font-size: 12px; color: var(--muted); padding: 3px 6px; margin-top: 2px; }
+
+/* ---------- Set verdicts: setup, set bar, tracklist ---------- */
+.setup-select { background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border); border-radius: 8px; padding: 5px 8px; color: var(--text); font-size: 12.5px; }
+.setup-select option { background: #15152a; }
+.inline-hint { margin: 0 !important; font-size: 11.5px; }
+#setbar-review { color: #ffd8a8; }
+.ed-review { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; padding: 8px 10px; margin: 0 0 8px; border-radius: 8px;
+  background: rgba(255,216,168,0.07); border: 1px solid rgba(255,216,168,0.25); font-size: 12.5px; color: #ffd8a8; }
+.ed-review span { flex: 1; min-width: 180px; }
+.ed-row.undecided { box-shadow: inset 3px 0 0 #ffd8a8; padding-left: 6px; }
+.ed-row .badge { display: inline-block; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #ffd8a8;
+  border: 1px solid rgba(255,216,168,0.4); border-radius: 999px; padding: 1px 7px; margin-left: 7px; }
+.ed-row .ops button.keep-op { color: #7af0c4; }

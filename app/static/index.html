@@ -20,6 +20,7 @@
   <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-skip" viewBox="0 0 24 24"><path d="M6 5.5v13l9.5-6.5z" fill="currentColor" stroke="none"/><path d="M18 5.5v13"/></symbol>
   <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.6 7.6 20 18M8.6 16.4 20 6"/></symbol>
+  <symbol id="i-keep" viewBox="0 0 24 24"><path d="M4.5 12.5l4.5 4.5L19.5 6.5"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
 </svg>
 
@@ -65,10 +66,10 @@
     </div>
   </header>
 
-  <div id="setbar" class="setbar" title="Everything that plays through is in the set. Skip cuts a song; saving the station starts a new section." hidden>
+  <div id="setbar" class="setbar" title="Keep (K) or Cut (X) decides the song and plays the next. Songs that play to the end follow the set's rule. Saving the station starts a new section." hidden>
     <span class="rec-dot"></span>
     <span class="setbar-name" id="setbar-name">Set</span>
-    <span class="setbar-meta"><span id="setbar-clock">00:00</span><span id="setbar-plan"></span> · <span id="setbar-kept">0 kept</span> · <span id="setbar-cut">0 cut</span></span>
+    <span class="setbar-meta"><span id="setbar-clock">00:00</span><span id="setbar-plan"></span> · <span id="setbar-kept">0 kept</span> · <span id="setbar-cut">0 cut</span><span id="setbar-review"></span></span>
     <button id="btn-set-close" class="linkish">Close set</button>
   </div>
 
@@ -110,10 +111,12 @@
       <div class="dock-side"></div>
       <div class="transport">
         <button id="btn-like" class="icon-btn" title="Bookmark (B)" aria-label="Bookmark"><svg class="bm" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+        <button id="btn-cut" class="icon-btn verdict cut-btn" data-label="Cut" title="Cut from the set and play the next song (X or ←)" aria-label="Cut and next"><svg class="ico"><use href="#i-cut"/></svg></button>
         <button id="btn-play" class="play-btn paused" title="Play / pause (Space)" aria-label="Play or pause">
           <svg class="ico i-play"><use href="#i-play"/></svg><svg class="ico i-pause"><use href="#i-pause"/></svg>
         </button>
-        <button id="btn-skip" class="icon-btn" title="Skip (N)" aria-label="Skip"><svg class="ico i-skip"><use href="#i-skip"/></svg><svg class="ico i-cut"><use href="#i-cut"/></svg></button>
+        <button id="btn-keep" class="icon-btn verdict keep-btn" data-label="Keep" title="Keep in the set and play the next song (K or →)" aria-label="Keep and next"><svg class="ico"><use href="#i-keep"/></svg></button>
+        <button id="btn-skip" class="icon-btn" title="Skip (N or →)" aria-label="Skip"><svg class="ico i-skip"><use href="#i-skip"/></svg></button>
         <a id="btn-download" class="icon-btn" title="Download WAV" aria-label="Download WAV" download><svg class="ico"><use href="#i-download"/></svg></a>
       </div>
       <div class="dock-side right">
@@ -147,11 +150,19 @@
       <button id="su-edit" class="linkish">Edit in Station</button>
     </div>
     <div class="setup-line">
+      <span class="k">Played to the end</span>
+      <select id="su-through" class="setup-select">
+        <option value="keep">Keep the song</option>
+        <option value="review">Leave it for review</option>
+      </select>
+      <span class="hint inline-hint">Keep and Cut always decide right away.</span>
+    </div>
+    <div class="setup-line">
       <span class="k">Ambience</span>
       <span id="su-amb">Off</span>
       <button id="su-amb-edit" class="linkish">Change</button>
     </div>
-    <p class="hint">Your station settings become the first section. Save the station during the set to start a new section; skip cuts a song from the set.</p>
+    <p class="hint">Your station settings become the first section. Save the station during the set to start a new section. Keep (K) or Cut (X) decides the song that is playing and moves on.</p>
     <div class="setup-actions">
       <button id="su-cancel" class="linkish">Cancel</button>
       <button id="su-start" class="btn btn-primary">Start set</button>
@@ -375,6 +386,11 @@
       <section class="ep-section" id="ep-editor" hidden>
         <h3 id="ed-heading">Tracklist</h3>
         <label class="field"><span>Episode title</span><input id="ed-name" type="text"></label>
+        <div id="ed-review" class="ed-review" hidden>
+          <span id="ed-review-text"></span>
+          <button id="ed-keep-all" class="linkish">Keep all</button>
+          <button id="ed-cut-all" class="linkish">Cut all</button>
+        </div>
         <ol id="ed-list" class="ed-list"></ol>
         <div class="ed-foot">
           <span id="ed-total" class="hint"></span>
