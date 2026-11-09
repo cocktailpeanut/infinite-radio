@@ -402,6 +402,26 @@ details.requests summary { cursor: pointer; color: var(--muted); font-size: 13px
 .field-note.warn { color: #ffd8a8; }
 #f-lang-tier { opacity: 0.75; }
 
+/* ---------- Ambience ---------- */
+.amb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+.amb-label { color: var(--text); font-weight: 600; flex: 1; min-width: 120px; }
+.amb-presets { margin-bottom: 10px; }
+.amb-custom { display: flex; gap: 8px; margin-bottom: 8px; }
+.amb-custom input { flex: 1; min-width: 0; background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 10px; color: var(--text); font-size: 13px; }
+.amb-custom input:focus { outline: none; border-color: rgba(139,92,246,0.6); }
+.amb-custom .btn { width: auto; white-space: nowrap; }
+.amb-other { display: flex; gap: 4px 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.amb-consent { border-top: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border); padding: 12px 0; margin: 8px 0; font-size: 13px; line-height: 1.5; }
+.amb-consent p { margin: 0 0 8px; }
+.amb-consent a { color: var(--accent-2); }
+.amb-consent-actions { display: flex; justify-content: flex-end; gap: 14px; align-items: center; }
+.amb-job { margin: 8px 0; }
+.amb-job-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.amb-job-head span:nth-child(2) { flex: 1; }
+.amb-controls { display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap; margin: 8px 0; font-size: 12.5px; color: var(--muted); }
+.amb-controls b { font-family: var(--mono); font-weight: 500; color: var(--text); min-width: 52px; }
+.warn-text { color: #ffb4b4 !important; }
+
 /* ---------- Song title styles on the stage (mirrors the episode cards) ---------- */
 .stage-card .stage-n { display: none; }
 .stage-card.minimal { background: none; backdrop-filter: none; -webkit-backdrop-filter: none; padding: 0; border-radius: 0; left: 3.8%; bottom: 7.5%; }

@@ -116,10 +116,12 @@ class Scene:
         if SETTINGS_FILE.exists():
             try:
                 saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-                self.state.update({k: saved[k] for k in ("kind", "file", "original_name") if k in saved})
+                self.state.update({k: saved[k] for k in ("kind", "file", "original_name", "has_audio") if k in saved})
                 self.state["settings"].update(saved.get("settings", {}))
             except Exception:
                 pass
+        if self.state.get("kind") == "video" and "has_audio" not in self.state and self.state.get("file"):
+            self.state["has_audio"] = not self.state["file"].endswith(".gif") and _has_audio(SCENE_DIR / self.state["file"])
         if self.state["file"] and not (SCENE_DIR / self.state["file"]).exists():
             self.state.update({"kind": "none", "file": None, "original_name": None})
 
@@ -177,11 +179,12 @@ class Scene:
         else:
             dest = SCENE_DIR / f"scene{ext}"
             dest.write_bytes(data)
+        has_audio = kind == "video" and ext != ".gif" and _has_audio(dest)
         with self.lock:
             for old in SCENE_DIR.glob("scene.*"):
                 if old != dest:
                     old.unlink(missing_ok=True)
-            self.state.update({"kind": kind, "file": dest.name, "original_name": filename})
+            self.state.update({"kind": kind, "file": dest.name, "original_name": filename, "has_audio": has_audio})
             self._save()
         return self.snapshot()
 
@@ -189,7 +192,7 @@ class Scene:
         with self.lock:
             for old in SCENE_DIR.glob("scene.*"):
                 old.unlink(missing_ok=True)
-            self.state.update({"kind": "none", "file": None, "original_name": None})
+            self.state.update({"kind": "none", "file": None, "original_name": None, "has_audio": False})
             self._save()
         return self.snapshot()
 
@@ -406,6 +409,19 @@ def render_motion_loop(base: Image.Image, out: Path, settings: dict, mood: str, 
     if code != 0:
         raise RuntimeError(f"ffmpeg failed while encoding the scene loop: {err[-400:]}")
     return loop
+
+
+def _has_audio(path: Path) -> bool:
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return False
+    ffprobe = str(Path(ffmpeg).with_name(Path(ffmpeg).name.replace("ffmpeg", "ffprobe")))
+    try:
+        res = subprocess.run([ffprobe, "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type",
+                              "-of", "csv=p=0", str(path)], capture_output=True, encoding="utf-8", errors="replace", timeout=30)
+        return "audio" in res.stdout
+    except Exception:
+        return False
 
 
 def _probe_duration(ffmpeg: str, path: Path) -> float:

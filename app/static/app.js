@@ -54,7 +54,9 @@
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch {}
-      throw new Error(detail);
+      const err = new Error(typeof detail === "string" ? detail : (detail.code || "request failed"));
+      err.status = res.status; err.detail = detail;
+      throw err;
     }
     const ct = res.headers.get("content-type") || "";
     return ct.includes("json") ? res.json() : res.text();
@@ -246,6 +248,8 @@
     const sc = state.scene;
     $("su-scene").textContent = !sc || sc.kind === "none" ? "none yet (a mood-colored card is used)" : `${sc.kind === "image" ? "image" : "loop"} · ${sc.original_name || sc.file}`;
     $("su-scene-clear").hidden = !sc || sc.kind === "none";
+    const ab = state.status?.ambience;
+    $("su-amb").textContent = ab && ab.enabled ? `${ab.label} · ${ab.level_db} dB under the music` : "Off";
     const vibe = $("su-vibe");
     vibe.textContent = describeVibe(state.status?.settings) + (state.settingsDirty ? "  (unsaved edits in Station — save to use them)" : "");
     vibe.classList.toggle("unsaved", !!state.settingsDirty);
@@ -498,7 +502,7 @@
       const hadSet = !!state.set;
       state.set = st.set;
       if (st.set && state.setup) { state.setup = false; }
-      renderSetBar(); renderSetup();
+      renderSetBar(); renderSetup(); onAmbienceStatus(st.ambience);
       if (hadSet !== !!st.set) renderNowPlaying();
       renderStage();
       applySettingsToForm(st.settings);
@@ -545,7 +549,10 @@
     playNext();
   };
 
+  audio.addEventListener("playing", () => ambSync());
+  audio.addEventListener("waiting", () => ambSync());
   audio.addEventListener("ended", () => {
+    setTimeout(ambSync, 0);
     if (state.track && state.set) api("/api/player/ended", { method: "POST", body: { track_id: state.track.id } }).catch(() => {});
     if (state.listening) playNext();
   });
@@ -565,7 +572,8 @@
   $("btn-play").onclick = async () => {
     ensureAudioGraph(); if (actx && actx.state === "suspended") await actx.resume();
     if (!state.track) { if (!state.listening) return tuneIn(); return playNext(); }
-    if (audio.paused) audio.play(); else audio.pause();
+    if (audio.paused) { state.userPaused = false; audio.play(); } else { state.userPaused = true; audio.pause(); }
+    ambSync();
   };
   $("btn-skip").onclick = cutAndSkip;
   $("btn-like").onclick = async () => {
@@ -579,12 +587,12 @@
     try {
       ensureAudioGraph(); if (actx && actx.state === "suspended") await actx.resume();
       await api("/api/station/on", { method: "POST" });
-      state.listening = true;
+      state.listening = true; state.userPaused = false;
       await refresh(); await playNext();
     } catch (e) { toast(e.message); }
   };
   $("btn-tune").onclick = tuneIn;
-  $("btn-stop").onclick = async () => { await api("/api/station/off", { method: "POST" }); state.listening = false; setBuffering(false); refresh(); };
+  $("btn-stop").onclick = async () => { await api("/api/station/off", { method: "POST" }); state.listening = false; setBuffering(false); ambSync(); refresh(); };
 
   // ---------- settings ----------
   const formPatch = () => ({ style: $("f-style").value.trim(), mood: $("f-mood").value, lyric_mode: $("f-lyric-mode").value, themes: $("f-themes").value.trim(), target_seconds: Number($("f-len").value), lookahead: Number($("f-lookahead").value), planning: $("f-planning").checked, language: $("f-language").value });
@@ -667,8 +675,8 @@
     state.activeTab = name;
     ["queue", "library", "episodes", "engine"].forEach((n) => $(`tab-${n}`).hidden = n !== name);
     if (name === "library") renderLibrary();
-    if (name === "engine" && state.status) renderEngine(state.status);
-    if (name === "episodes") { loadScene(); loadEpisodes(); }
+    if (name === "engine" && state.status) { renderEngine(state.status); loadAmbience(); }
+    if (name === "episodes") { loadScene(); loadEpisodes(); loadAmbience(); }
   };
   document.querySelectorAll(".tab").forEach((tab) => tab.onclick = () => switchTab(tab.dataset.tab));
   $("engine-restart").onclick = async () => { try { await api("/api/engine/restart", { method: "POST" }); toast("audio.cpp restarted", true); refresh(); } catch (e) { toast(e.message); } };
@@ -757,6 +765,175 @@
     }
   };
   window.addEventListener("resize", () => { if (state.set && state.scene) renderStage(true); });
+
+  // ---------- ambience: panel ----------
+  const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
+  const loadAmbience = async () => { try { state.amb = await api("/api/ambience"); renderAmbience(); } catch (e) { /* server restarting */ } };
+  const ambBusy = (job) => !!job && (job.state === "running" || job.state === "waiting");
+  const renderAmbJob = (job) => {
+    const box = $("amb-job"), err = $("amb-error");
+    if (ambBusy(job)) {
+      box.hidden = false; err.hidden = true;
+      $("amb-step").textContent = job.step || "Working…";
+      $("amb-fill").style.width = fmtPct(job.progress);
+    } else {
+      box.hidden = true;
+      if (job && job.state === "error" && job.id !== state.ambDismissedJob) { err.hidden = false; err.textContent = job.error || "Something went wrong."; }
+      else err.hidden = true;
+    }
+    $("amb-generate").disabled = ambBusy(job);
+  };
+  const renderAmbience = () => {
+    const a = state.amb; if (!a) return;
+    const pool = a.pool, st = a.settings, job = a.job;
+    $("amb-enabled").checked = !!(st.enabled && pool);
+    $("amb-enabled").disabled = !pool;
+    const src = pool ? { generate: "generated", upload: "uploaded", scene: "from the scene video" }[pool.source] || pool.source : "";
+    $("amb-label").textContent = pool ? `${pool.label} · ${pool.takes.length} take${pool.takes.length === 1 ? "" : "s"} · ${src}` : "None yet";
+    $("amb-preview").hidden = !pool;
+    $("amb-preview").textContent = state.ambPreview ? "■ Stop preview" : "▶ Preview";
+    $("amb-clear").hidden = !pool;
+    $("amb-scene").hidden = !a.scene_has_audio;
+    $("amb-regen").hidden = !(pool && pool.source === "generate");
+    $("amb-controls").hidden = !pool;
+    if (document.activeElement !== $("amb-level")) $("amb-level").value = st.level_db;
+    $("amb-level-label").textContent = `${st.level_db} dB`;
+    $("amb-duck").checked = !!st.duck;
+    $("amb-presets").innerHTML = (a.presets || []).map((p) => `<button class="chip ${pool && pool.source === "generate" && pool.label === p.name ? "active" : ""}" data-preset="${p.id}">${esc(p.name)}</button>`).join("");
+    const m = a.model;
+    $("amb-size").textContent = `${(m.size / 1e9).toFixed(1)} GB${m.partial ? `, ${(m.partial / 1e9).toFixed(1)} GB already downloaded` : ""}`;
+    $("amb-license").href = m.license.url; $("amb-license").textContent = m.license.name;
+    $("amb-license-summary").textContent = m.license.summary;
+    $("amb-consent").hidden = !state.ambPending;
+    $("amb-remove-model").hidden = !m.installed;
+    renderAmbJob(job);
+  };
+  const requestGenerate = async (req) => {
+    state.ambDismissedJob = state.amb?.job?.id;
+    try { state.amb = await api("/api/ambience/generate", { method: "POST", body: req }); state.ambPending = null; renderAmbience(); }
+    catch (e) {
+      if (e.status === 409 && e.detail && e.detail.code === "model_required") {
+        state.ambPending = req; await loadAmbience();
+        $("amb-consent").scrollIntoView({ behavior: "smooth", block: "center" });
+      } else toast(e.message);
+    }
+  };
+  $("amb-presets").onclick = (ev) => { const b = ev.target.closest("[data-preset]"); if (b) requestGenerate({ preset: b.dataset.preset, prompt: "" }); };
+  $("amb-generate").onclick = () => { const p = $("amb-prompt").value.trim(); if (!p) return toast("Describe a sound, or pick one of the presets."); requestGenerate({ prompt: p }); };
+  $("amb-prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") $("amb-generate").click(); });
+  $("amb-regen").onclick = () => { const pool = state.amb?.pool; if (pool) requestGenerate({ prompt: pool.prompt || pool.label }); };
+  $("amb-consent-cancel").onclick = () => { state.ambPending = null; renderAmbience(); };
+  $("amb-consent-ok").onclick = async () => {
+    const req = state.ambPending; state.ambPending = null;
+    try { state.amb = await api("/api/ambience/model/download", { method: "POST", body: { accept_license: true, then_generate: req } }); renderAmbience(); }
+    catch (e) { toast(e.message); }
+  };
+  $("amb-cancel").onclick = async () => { try { state.amb = await api("/api/ambience/cancel", { method: "POST" }); renderAmbience(); } catch (e) { toast(e.message); } };
+  $("amb-file").onchange = async (ev) => {
+    const f = ev.target.files[0]; ev.target.value = ""; if (!f) return;
+    const fd = new FormData(); fd.append("file", f, f.name);
+    try { state.amb = await api("/api/ambience/upload", { method: "POST", body: fd }); renderAmbience(); } catch (e) { toast(e.message); }
+  };
+  $("amb-scene").onclick = async () => { try { state.amb = await api("/api/ambience/from-scene", { method: "POST" }); renderAmbience(); } catch (e) { toast(e.message); } };
+  $("amb-clear").onclick = async () => { state.ambPreview = false; state.amb = await api("/api/ambience", { method: "DELETE" }); renderAmbience(); refresh(); };
+  $("amb-enabled").onchange = async () => { state.amb = await api("/api/ambience", { method: "PUT", body: { enabled: $("amb-enabled").checked } }); renderAmbience(); refresh(); };
+  $("amb-duck").onchange = async () => { state.amb = await api("/api/ambience", { method: "PUT", body: { duck: $("amb-duck").checked } }); renderAmbience(); refresh(); };
+  $("amb-level").addEventListener("input", () => { const v = Number($("amb-level").value); $("amb-level-label").textContent = `${v} dB`; ambSetLevel(v); });
+  $("amb-level").addEventListener("change", async () => { state.amb = await api("/api/ambience", { method: "PUT", body: { level_db: Number($("amb-level").value) } }); renderAmbience(); refresh(); });
+  $("amb-preview").onclick = async () => {
+    ensureAudioGraph(); if (actx && actx.state === "suspended") await actx.resume();
+    state.ambPreview = !state.ambPreview; renderAmbience(); ambSync();
+  };
+  $("amb-remove-model").onclick = async () => {
+    if (!confirm("Remove the ambience model (1.7 GB)? Ambience you already generated keeps working; generating new ones downloads it again.")) return;
+    try { const r = await api("/api/ambience/model", { method: "DELETE" }); state.amb = r; renderAmbience(); toast("Ambience model removed.", true); } catch (e) { toast(e.message); }
+  };
+  $("su-amb-edit").onclick = () => { switchTab("episodes"); setTimeout(() => $("amb-section").scrollIntoView({ behavior: "smooth", block: "start" }), 50); };
+  const onAmbienceStatus = (brief) => {
+    if (!brief) return;
+    const prev = state.ambBrief; state.ambBrief = brief;
+    const job = brief.job;
+    if (ambBusy(job)) { renderAmbJob(job); if (!state.amb || !ambBusy(state.amb.job)) loadAmbience(); }
+    else if (prev && ambBusy(prev.job)) loadAmbience();  // a job just finished: refresh pool, controls and player
+    if (!prev || prev.pool_id !== brief.pool_id || prev.enabled !== brief.enabled || prev.level_db !== brief.level_db) loadAmbience();
+    ambSync();
+  };
+
+  // ---------- ambience: live playback (Web Audio) ----------
+  // Takes are normalized to -30 dBFS RMS; songs play at roughly -16 dBFS, so "level" is dB under that.
+  const AMB_REF_DB = -16, AMB_TAKE_DB = -30, AMB_XF = 3;
+  const ambP = { poolId: null, buffers: [], loadingId: null, out: null, duck: null, running: false, next: 0, last: -1, bag: [], timer: null, sources: new Set() };
+  const ambLinear = (lvl) => Math.pow(10, (AMB_REF_DB + lvl - AMB_TAKE_DB) / 20);
+  const ambSetLevel = (lvl) => { if (ambP.out && actx) ambP.out.gain.setTargetAtTime(ambLinear(lvl), actx.currentTime, 0.3); };
+  const ambLoadBuffers = async (pool) => {
+    if (ambP.poolId === pool.id && ambP.buffers.length) return true;
+    if (ambP.loadingId === pool.id) return false;
+    ambP.loadingId = pool.id;
+    try {
+      const bufs = await Promise.all(pool.takes.map(async (t) => actx.decodeAudioData(await (await fetch(t.url)).arrayBuffer())));
+      ambP.buffers = bufs; ambP.poolId = pool.id; ambP.bag = []; ambP.last = -1;
+      return true;
+    } catch (e) { console.warn("ambience load failed", e); return false; }
+    finally { ambP.loadingId = null; }
+  };
+  const ambNextIndex = () => {
+    const n = ambP.buffers.length; if (n === 1) return 0;
+    if (!ambP.bag.length) { ambP.bag = [...Array(n).keys()].sort(() => Math.random() - 0.5); if (ambP.bag[0] === ambP.last) ambP.bag.push(ambP.bag.shift()); }
+    ambP.last = ambP.bag.shift(); return ambP.last;
+  };
+  const curve = (up) => { const c = new Float32Array(64); for (let k = 0; k < 64; k++) c[k] = Math.sqrt(up ? k / 63 : 1 - k / 63); return c; };
+  const CURVE_UP = curve(true), CURVE_DOWN = curve(false);
+  const ambSchedule = () => {
+    if (!ambP.running || !actx) return;
+    while (ambP.next < actx.currentTime + 8) {
+      const b = ambP.buffers[ambNextIndex()];
+      const src = actx.createBufferSource(), g = actx.createGain();
+      const t0 = Math.max(ambP.next, actx.currentTime + 0.02), dur = b.duration, xf = Math.min(AMB_XF, dur / 3);
+      src.buffer = b; g.gain.setValueAtTime(0, t0);
+      g.gain.setValueCurveAtTime(CURVE_UP, t0, xf);
+      g.gain.setValueCurveAtTime(CURVE_DOWN, t0 + dur - xf, xf);
+      src.connect(g); g.connect(ambP.out);
+      src.start(t0); src.stop(t0 + dur + 0.05);
+      ambP.sources.add(src); src.onended = () => { ambP.sources.delete(src); try { g.disconnect(); } catch {} };
+      ambP.next = t0 + dur - xf;
+    }
+  };
+  const ambStart = async () => {
+    const pool = state.amb?.pool; if (!pool || !actx) return;
+    if (!(await ambLoadBuffers(pool))) return;
+    if (ambP.running) return;
+    ambP.out = actx.createGain(); ambP.duck = actx.createGain();
+    ambP.out.gain.setValueAtTime(0, actx.currentTime);
+    ambP.out.gain.linearRampToValueAtTime(ambLinear(state.amb.settings.level_db), actx.currentTime + 1.5);
+    ambP.out.connect(ambP.duck); ambP.duck.connect(actx.destination);
+    ambP.running = true; ambP.next = actx.currentTime + 0.05;
+    ambSchedule(); ambP.timer = setInterval(ambSchedule, 1000);
+    ambDuck();
+  };
+  const ambStop = () => {
+    if (!ambP.running) return;
+    ambP.running = false; clearInterval(ambP.timer);
+    const out = ambP.out, duck = ambP.duck, srcs = [...ambP.sources];
+    out.gain.cancelScheduledValues(actx.currentTime); out.gain.setTargetAtTime(0, actx.currentTime, 0.3);
+    setTimeout(() => { srcs.forEach((s) => { try { s.stop(); } catch {} }); try { out.disconnect(); duck.disconnect(); } catch {} }, 1500);
+    ambP.sources.clear();
+  };
+  const ambDuck = () => {
+    if (!ambP.running || !ambP.duck) return;
+    const b = state.ambBrief || {};
+    const musicOn = !!state.track && !audio.paused && !audio.ended && audio.readyState >= 3;
+    const target = b.duck && musicOn && !state.ambPreview ? Math.pow(10, -6 / 20) : 1;
+    ambP.duck.gain.setTargetAtTime(target, actx.currentTime, 0.6);
+  };
+  const ambSync = () => {
+    const b = state.ambBrief || {}, pool = state.amb?.pool;
+    const want = !!actx && !!pool && (state.ambPreview || (state.listening && !state.userPaused && b.enabled && b.pool_id === pool.id));
+    if (ambP.running && (!want || ambP.poolId !== pool?.id)) ambStop();
+    if (want && !ambP.running) ambStart();
+    if (ambP.running && state.amb) ambSetLevel(state.amb.settings.level_db);
+    ambDuck();
+  };
+  setInterval(ambDuck, 500);
 
   // ---------- boot ----------
   loadPresets().then(refresh);

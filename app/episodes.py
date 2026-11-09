@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import shutil
@@ -39,12 +40,13 @@ def _slug(text: str) -> str:
 
 
 class EpisodeRenderer:
-    def __init__(self, library, scene: Scene, station_getter):
+    def __init__(self, library, scene: Scene, station_getter, ambience=None):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         EPISODES_DIR.mkdir(parents=True, exist_ok=True)
         self.library = library
         self.scene = scene
         self.station_getter = station_getter  # callable -> settings dict
+        self.ambience = ambience  # Ambience manager or None
         self.lock = threading.Lock()
         self.jobs: list[dict] = []
         if JOBS_FILE.exists():
@@ -124,6 +126,7 @@ class EpisodeRenderer:
             "outputs": {},
             "duration": None,
             "error": None,
+            "ambience": self.ambience.job_snapshot() if self.ambience else None,
             # On-screen titles, captured now so later setting changes don't alter a queued render.
             "display": {k: self.scene.snapshot()["settings"].get(k, d) for k, d in (("title_style", "minimal"), ("subtitle", "none"))},
         }
@@ -196,12 +199,25 @@ class EpisodeRenderer:
         self._update(job_id, status="mixing", step="Mixing audio", progress=0.02)
         paths = [self.library.audio_path(t["track_id"]) for t in job["tracks"]]
         mix = mix_tracks(paths, work / "episode.wav", job["crossfade"],
-                         progress=lambda f: self._update(job_id, progress=0.02 + 0.18 * f))
+                         progress=lambda f: self._update(job_id, progress=0.02 + 0.14 * f))
         tracks = job["tracks"]
         for t, start, dur in zip(tracks, mix["starts"], mix["durations"]):
             t["start"] = round(start, 2)
             t["duration"] = round(dur, 2)
         total = mix["duration"]
+        self._check_cancel(job_id)
+
+        # 1b. Ambience bed (lead-in before the first song, tail after the last)
+        amb = job.get("ambience")
+        if amb and self.ambience:
+            self._update(job_id, step=f"Mixing ambience · {amb['label']}", progress=0.16)
+            info = self.ambience.mix_into(work / "episode.wav", work / "episode_amb.wav", amb,
+                                          progress=lambda f: self._update(job_id, progress=0.16 + 0.04 * f))
+            os.replace(work / "episode_amb.wav", work / "episode.wav")
+            for t in tracks:
+                t["start"] = round(t["start"] + info["lead"], 2)
+            total += info["lead"] + info["tail"]
+            print(f"[episodes] ambience '{amb['label']}' mixed: music {info['music_db']} dBFS, bed gain {info['bed_gain_db']} dB", flush=True)
         self._update(job_id, tracks=tracks, duration=round(total, 2))
         self._check_cancel(job_id)
 
@@ -448,6 +464,11 @@ class EpisodeRenderer:
         lines.append(f"0:00 {tracks[0]['title']}")
         for t in tracks[1:]:
             lines.append(f"{format_timestamp(t['start'])} {t['title']}")
+        amb = job.get("ambience")
+        if amb:
+            lines += ["", f"Ambience: {amb['label']}"]
+            if amb.get("source") == "generate":
+                lines.append("Ambience generated locally with Stable Audio 3 Small SFX. Powered by Stability AI.")
         lines += ["",
                   "Made with Infinite Radio: https://github.com/cocktailpeanut/infinite-radio",
                   "Music generated locally with YuE2 (m-a-p) running on audio.cpp (0xShug0).",

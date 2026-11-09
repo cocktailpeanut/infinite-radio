@@ -29,6 +29,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+from ambience import Ambience  # noqa: E402
 from engine import AudioCppEngine, EngineError  # noqa: E402
 from episodes import EpisodeRenderer  # noqa: E402
 from lyricwriter import LANGUAGES, TIER_LABEL  # noqa: E402
@@ -67,7 +68,10 @@ library = Library()
 radio = Radio(engine, library)
 sets = SetManager()
 scene = Scene()
-episodes = EpisodeRenderer(library, scene, lambda: radio.settings)
+ambience = Ambience(engine, radio.gpu_lock)
+episodes = EpisodeRenderer(library, scene, lambda: radio.settings, ambience)
+ambience.protected = lambda: {j["ambience"]["pool_id"] for j in episodes.all()
+                              if j.get("ambience") and j["status"] not in ("done", "error")}
 
 
 def _boot_engine() -> None:
@@ -146,6 +150,22 @@ class ScenePatch(BaseModel):
     subtitle: str | None = None
 
 
+class AmbiencePatch(BaseModel):
+    enabled: bool | None = None
+    level_db: int | None = None
+    duck: bool | None = None
+
+
+class AmbienceGenerate(BaseModel):
+    prompt: str | None = ""
+    preset: str | None = None
+
+
+class AmbienceDownload(BaseModel):
+    accept_license: bool = False
+    then_generate: AmbienceGenerate | None = None
+
+
 class PlayerEvent(BaseModel):
     track_id: str
 
@@ -176,6 +196,7 @@ def status():
     st["set"] = cur
     active = [j for j in episodes.all() if j["status"] not in ("done", "error")]
     st["rendering"] = active[0] if active else None
+    st["ambience"] = ambience.brief()
     return st
 
 
@@ -537,6 +558,113 @@ def scene_preview():
         raise HTTPException(404, "no scene file")
     media = "image/png" if p.suffix == ".png" else {"gif": "image/gif", "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime"}.get(p.suffix.lstrip("."), "application/octet-stream")
     return FileResponse(str(p), media_type=media, headers={"Cache-Control": "no-store"})
+
+
+# ---------- ambience ----------
+def _ambience_state():
+    snap = ambience.snapshot()
+    sc = scene.snapshot()
+    snap["scene_has_audio"] = bool(sc.get("kind") == "video" and sc.get("has_audio"))
+    return snap
+
+
+@app.get("/api/ambience")
+def get_ambience():
+    return _ambience_state()
+
+
+@app.put("/api/ambience")
+def put_ambience(patch: AmbiencePatch):
+    ambience.update_settings({k: v for k, v in patch.model_dump().items() if v is not None})
+    return _ambience_state()
+
+
+@app.delete("/api/ambience")
+def clear_ambience():
+    ambience.clear()
+    return _ambience_state()
+
+
+@app.post("/api/ambience/generate")
+def generate_ambience(body: AmbienceGenerate):
+    try:
+        ambience.generate(body.prompt or "", body.preset)
+    except FileNotFoundError:
+        # First use: the client shows the size and licence, then calls /api/ambience/model/download.
+        raise HTTPException(409, {"code": "model_required", "model": ambience.model_status()})
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return _ambience_state()
+
+
+@app.post("/api/ambience/model/download")
+def download_ambience_model(body: AmbienceDownload):
+    if not body.accept_license:
+        raise HTTPException(400, "the model licence must be accepted to download it")
+    try:
+        ambience.download_model(body.then_generate.model_dump() if body.then_generate else None)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return _ambience_state()
+
+
+@app.delete("/api/ambience/model")
+def remove_ambience_model():
+    try:
+        removed = ambience.remove_model()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return {"removed": removed, **_ambience_state()}
+
+
+@app.post("/api/ambience/cancel")
+def cancel_ambience():
+    if not ambience.cancel():
+        raise HTTPException(409, "nothing to cancel")
+    return _ambience_state()
+
+
+@app.post("/api/ambience/upload")
+async def upload_ambience(file: UploadFile = File(...)):
+    data = await file.read()
+    if len(data) > 300 * 1024 * 1024:
+        raise HTTPException(413, "file too large (300 MB max)")
+    if not data:
+        raise HTTPException(400, "empty file")
+    tmp = APP_DIR / "data" / "ambience" / f"_upload_{os.getpid()}_{len(data)}{Path(file.filename or 'audio').suffix[:8]}"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(data)
+    label = Path(file.filename or "Uploaded audio").stem[:40] or "Uploaded audio"
+    try:
+        ambience.from_file(tmp, label, "upload")
+    except RuntimeError as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(409, str(e))
+    return _ambience_state()
+
+
+@app.post("/api/ambience/from-scene")
+def ambience_from_scene():
+    sc = scene.snapshot()
+    p = scene.preview_path()
+    if sc.get("kind") != "video" or not sc.get("has_audio") or not p:
+        raise HTTPException(400, "the current scene has no sound")
+    try:
+        ambience.from_file(p, f"Scene sound · {Path(sc.get('original_name') or p.name).stem[:28]}", "scene")
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return _ambience_state()
+
+
+@app.get("/api/ambience/pools/{pool_id}/takes/{index}")
+def ambience_take(pool_id: str, index: int, format: str = "m4a"):
+    if not re.fullmatch(r"[0-9a-f]{6,16}", pool_id):
+        raise HTTPException(404, "not found")
+    p = ambience.take_path(pool_id, index, browser=(format == "m4a"))
+    if not p or not p.exists():
+        raise HTTPException(404, "not found")
+    media = "audio/mp4" if p.suffix == ".m4a" else "audio/wav"
+    return FileResponse(str(p), media_type=media, headers={"Cache-Control": "max-age=86400"})
 
 
 @app.exception_handler(EngineError)

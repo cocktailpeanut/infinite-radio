@@ -112,11 +112,14 @@ infinite_radio/
 │   ├── mixer.py         # crossfade mixer with exact chapter times
 │   ├── scene.py         # image/GIF/video -> seamless 1080p loop
 │   ├── episodes.py      # render jobs: cards, ffmpeg pass, outputs
+│   ├── ambience.py      # ambience pools, on-demand Stable Audio model, bed mixing
+│   ├── typo.py          # poster, intro and card typography
 │   ├── static/          # dark neon web UI
 │   ├── tools/extract_bin.py
 │   ├── bin/             # audio.cpp release (downloaded); bin/llama/ holds llama.cpp
 │   ├── models/Yue2-3B-GGUF/  # YuE2 GGUF package (downloaded)
 │   ├── models/lyrics/   # Qwen3 1.7B GGUF for the lyric writer (downloaded)
+│   ├── models/stable-audio-sfx/  # ambience model, only after you opt in (downloaded)
 │   ├── output/          # generated WAV files, episodes/<name>/ folders
 │   └── data/            # station.json, library.json, server config
 ├── install.js  start.js  update.js  reset.js  pinokio.js  pinokio.json
@@ -165,6 +168,27 @@ thumbnail.png      1280x720 frame with the episode title
 description.txt    title, chapter timestamps (0:00 first), credits, AI disclosure, license note
 tracklist.json     songs with exact start times and durations
 ```
+
+**Ambience** (Episodes tab) lays a quiet bed of sound under the music, the way
+"rainy café jazz" playlists do. Pick a preset (rain on a window, café, subway, vinyl
+crackle, night city, fireplace, ocean, forest night), describe your own sound, upload
+an audio file, or reuse the sound of your scene video. Level is set in dB under the
+music, and "Softer while songs play" ducks it by up to 6 dB so it fills the gaps
+between songs and quiet passages. It plays live under the player (also while the
+next song is still being generated) and is mixed into rendered episodes with a 4 s
+lead-in before the first song and a 6 s fade-out after the last.
+
+Generated ambience uses Stable Audio 3 Small SFX on the same audio.cpp engine. The
+model (1.7 GB) is **not** installed up front: the first time you choose a generated
+sound, the app shows its size and licence (Stability AI Community License) and
+downloads it on your confirmation, resuming if interrupted and verifying its
+SHA-256. It can be removed again from the Engine tab. A generated ambience is a
+pool of about 10 short takes; uneven takes and tone outliers are dropped, the rest
+are matched in loudness, tone and stereo width, and playback chains them in
+shuffled order with 3 s crossfades so nothing repeats on a fixed period. Building a
+pool takes 20 to 30 seconds and waits for the current song render to finish rather
+than slowing it down. Uploads should be your own recordings or CC0 sounds; ambience
+copied from other videos can trigger YouTube copyright claims.
 
 Upload is manual: drag `episode.mp4` into YouTube Studio, paste `description.txt`
 (YouTube turns the timestamps into chapters when there are at least three), and upload
@@ -228,6 +252,14 @@ Base URL: the address shown in the Pinokio terminal (for example
 | POST | `/api/episodes/{id}/cancel`, DELETE `/api/episodes/{id}` | Cancel a render, delete an episode and its files |
 | GET | `/api/scene`, PUT `/api/scene` | Scene settings (`camera`, `weather`, `weather_density`, `fog`, `flicker`, `grain`, `vignette`, `pingpong`, `loop_seconds`, `hw_encode`, `title_style` = minimal\|card\|none, `subtitle` = none\|genre\|mood\|language) |
 | POST | `/api/scene/upload` (multipart `file`), DELETE `/api/scene`, GET `/api/scene/preview` | Set, clear or view the scene file |
+| GET | `/api/ambience` | Ambience settings, current pool and takes, model status and licence, running job, presets |
+| PUT | `/api/ambience` `{enabled, level_db, duck}` | Turn ambience on or off, set its level (-36 to -6 dB under the music) and ducking |
+| POST | `/api/ambience/generate` `{preset}` or `{prompt}` | Build a generated pool; returns 409 `model_required` with size and licence until the model is installed |
+| POST | `/api/ambience/model/download` `{accept_license: true, then_generate?}` | Download the ambience model (resumable), optionally generating right after |
+| DELETE | `/api/ambience/model` | Remove the ambience model |
+| POST | `/api/ambience/upload` (multipart `file`), `/api/ambience/from-scene` | Build a pool from an audio file or from the scene video's sound |
+| POST | `/api/ambience/cancel`, DELETE `/api/ambience` | Cancel the running ambience job; clear the ambience |
+| GET | `/api/ambience/pools/{id}/takes/{n}?format=m4a\|wav` | One take of a pool |
 
 ### curl
 
@@ -332,6 +364,8 @@ python server.py
   (runtime, MIT-licensed; see `app/bin/LICENSE` after install).
 - [YuE2](https://huggingface.co/audio-cpp/Yue2-3B-GGUF) by the m-a-p team, GGUF
   packaging by audio-cpp. Weights: CC BY-NC 4.0, non-commercial.
+- [Stable Audio 3 Small SFX](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) for generated ambience,
+  under the Stability AI Community License (downloaded only when you opt in). Powered by Stability AI.
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) and
   [Qwen3 1.7B](https://huggingface.co/unsloth/Qwen3-1.7B-GGUF) (Apache 2.0) for the lyric writer.
 - Infinite Radio launcher and app: MIT (see `LICENSE`).

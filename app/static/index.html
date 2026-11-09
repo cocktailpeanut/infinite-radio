@@ -138,6 +138,11 @@
         <span id="su-vibe">—</span>
         <button id="su-edit" class="linkish">Edit in Station</button>
       </div>
+      <div class="setup-line">
+        <span class="k">Ambience</span>
+        <span id="su-amb">Off</span>
+        <button id="su-amb-edit" class="linkish">Change</button>
+      </div>
       <p class="hint">Your station settings become the first section. Save the station during the set to start a new section; skip cuts a song from the set.</p>
       <div class="setup-actions">
         <button id="su-cancel" class="linkish">Cancel</button>
@@ -263,6 +268,44 @@
         </div>
       </section>
 
+      <section class="ep-section" id="amb-section">
+        <h3>Ambience <span class="hint inline">a quiet bed of sound under the music</span></h3>
+        <div class="amb-head">
+          <label class="chk"><input type="checkbox" id="amb-enabled"> On</label>
+          <span id="amb-label" class="amb-label">None yet</span>
+          <button id="amb-preview" class="linkish" hidden>▶ Preview</button>
+          <button id="amb-clear" class="linkish" hidden>Remove</button>
+        </div>
+        <div class="presets amb-presets" id="amb-presets"></div>
+        <div class="amb-custom">
+          <input id="amb-prompt" type="text" placeholder="Or describe a sound: rain on a tin roof, train station at night…" autocomplete="off">
+          <button id="amb-generate" class="btn btn-ghost small">Generate</button>
+        </div>
+        <div class="amb-other">
+          <label class="linkish file-btn">Upload audio<input id="amb-file" type="file" accept="audio/*,video/*" hidden></label>
+          <button id="amb-scene" class="linkish" hidden>Use the scene video's sound</button>
+          <button id="amb-regen" class="linkish" hidden>New takes</button>
+        </div>
+        <div id="amb-consent" class="amb-consent" hidden>
+          <p><b>Generated ambience needs a one-time download</b> of Stable Audio 3 Small SFX (<span id="amb-size">1.7 GB</span>). It runs on this computer; nothing is sent anywhere.</p>
+          <p class="hint">Licence: <a id="amb-license" href="#" target="_blank" rel="noopener">Stability AI Community License</a>. <span id="amb-license-summary"></span></p>
+          <div class="amb-consent-actions">
+            <button id="amb-consent-cancel" class="linkish">Cancel</button>
+            <button id="amb-consent-ok" class="btn btn-primary small">Download and generate</button>
+          </div>
+        </div>
+        <div id="amb-job" class="amb-job" hidden>
+          <div class="amb-job-head"><span class="spinner small"></span><span id="amb-step">Working…</span><button id="amb-cancel" class="linkish">Cancel</button></div>
+          <div class="ep-bar"><div id="amb-fill" style="width:0%"></div></div>
+        </div>
+        <p id="amb-error" class="hint warn-text" hidden></p>
+        <div class="amb-controls" id="amb-controls" hidden>
+          <label class="field inline-field"><span>Level</span><input id="amb-level" type="range" min="-36" max="-6" step="1"><b id="amb-level-label">-18 dB</b></label>
+          <label class="chk"><input type="checkbox" id="amb-duck"> Softer while songs play</label>
+        </div>
+        <p class="hint">Uploads: use your own recordings or CC0 sounds. Ambience copied from other videos can trigger YouTube copyright claims.</p>
+      </section>
+
       <section class="ep-section" id="ep-build">
         <h3>Build from library</h3>
         <div class="build-row">
@@ -305,6 +348,7 @@
       <dl class="kv" id="engine-kv"></dl>
       <pre id="engine-log" class="log"></pre>
       <button id="engine-restart" class="btn btn-ghost">Restart audio.cpp</button>
+      <button id="amb-remove-model" class="btn btn-ghost" hidden>Remove ambience model</button>
     </div>
   </aside>
 </main>
