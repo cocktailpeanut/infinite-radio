@@ -55,6 +55,8 @@ TIER_LABEL = {"evaluated": "evaluated by the YuE2 authors", "demo": "on the offi
 SCHEMA = {
     "type": "object",
     "properties": {
+        # Written first so the lyrics are conditioned on a concrete theme.
+        "theme": {"type": "string", "minLength": 3, "maxLength": 100},
         "title": {"type": "string", "minLength": 1, "maxLength": 60},
         "verse1": {"type": "array", "items": {"type": "string", "maxLength": 90}, "minItems": 2, "maxItems": 4},
         "chorus": {"type": "array", "items": {"type": "string", "maxLength": 90}, "minItems": 2, "maxItems": 4},
@@ -62,7 +64,7 @@ SCHEMA = {
         "bridge": {"type": "array", "items": {"type": "string", "maxLength": 90}, "minItems": 2, "maxItems": 4},
         "outro": {"type": "array", "items": {"type": "string", "maxLength": 90}, "minItems": 1, "maxItems": 3},
     },
-    "required": ["title", "verse1", "chorus", "verse2", "bridge", "outro"],
+    "required": ["theme", "title", "verse1", "chorus", "verse2", "bridge", "outro"],
 }
 
 SYSTEM = (
@@ -82,6 +84,7 @@ class Written:
     language: str
     seconds: float
     attempt: int
+    theme: str = ""
 
 
 def apply_language(style: str, language: str) -> str:
@@ -230,13 +233,24 @@ class LyricWriter:
         }
 
     # ---------- generation ----------
-    def write(self, style: str, mood: str, themes: str, language: str, target_seconds: int, seed: int) -> Written | None:
+    def write(self, style: str, mood: str, themes: str, language: str, target_seconds: int, seed: int,
+              inspiration: list[str] | None = None) -> Written | None:
+        """Write one lyric set. With `themes` empty, pass `inspiration` words (see themeseeds.py):
+        the model builds a concrete theme around them, which keeps songs varied."""
         if not self.available():
             return None
         native = NATIVE_NAME.get(language)
         lang_label = f"{language} ({native})" if native else language
-        prompt = (f"Language: {lang_label}\nStyle: {style}\nMood: {mood}\n"
-                  f"Themes: {themes or 'free choice'}\nSong length: about {max(1, round(target_seconds / 60))} minute(s)\n"
+        themes = (themes or "").strip()
+        if themes:
+            theme_line = f"Themes: {themes}\nSummarize the song's theme in one short line in the theme field."
+        elif inspiration:
+            theme_line = (f"Inspiration words: {', '.join(inspiration)}. Build a specific, concrete theme around them "
+                          f"and put it in the theme field.")
+        else:
+            theme_line = "Choose a specific, concrete theme and put it in the theme field."
+        prompt = (f"Language: {lang_label}\nStyle: {style}\nMood: {mood}\n{theme_line}\n"
+                  f"Song length: about {max(1, round(target_seconds / 60))} minute(s)\n"
                   f"Every line must be written in {lang_label}. Write the lyrics now.")
         for attempt in (1, 2):
             t0 = time.time()
@@ -249,7 +263,9 @@ class LyricWriter:
                 self.calls += 1
                 if not problems:
                     self.last = {"mode": "llm", "error": None, "seconds": round(secs, 1), "language": language}
-                    return Written(title=data["title"].strip()[:60], lyrics=lyrics, language=language, seconds=secs, attempt=attempt)
+                    theme = themes or re.sub(r"\s+", " ", str(data.get("theme", ""))).strip().strip("\"“”.")[:100]
+                    return Written(title=data["title"].strip()[:60], lyrics=lyrics, language=language, seconds=secs,
+                                   attempt=attempt, theme=theme)
                 self.last = {"mode": "llm", "error": "; ".join(problems), "seconds": round(secs, 1), "language": language}
                 print(f"[lyrics] attempt {attempt} rejected: {problems}", flush=True)
             except Exception as e:  # noqa: BLE001
@@ -306,6 +322,9 @@ class LyricWriter:
             if len(v) < (1 if k == "outro" else 2):
                 problems.append(f"{k} too short")
         d["title"] = _clean_title(str(d.get("title", "")), blocks["chorus"] or blocks["verse1"])
+        if language in EXPECTED_SCRIPT and not script_matches(d["title"], language):
+            # e.g. an English title over Korean lyrics: take the title from the chorus instead
+            d["title"] = _clean_title("", blocks["chorus"] or blocks["verse1"])
         all_lines = sum(blocks.values(), [])
         if any(len(l) > 90 for l in all_lines):
             problems.append("overlong line")
@@ -328,5 +347,5 @@ if __name__ == "__main__":  # manual check: python lyricwriter.py Japanese
     lang = sys.argv[1] if len(sys.argv) > 1 else "English"
     w = LyricWriter()
     print("available:", w.available(), w.binary, w.model)
-    r = w.write("city pop, groovy bass, female vocal", "nostalgic", "neon rain", lang, 120, 42)
-    print(r.title if r else None); print(r.lyrics if r else w.last)
+    r = w.write("city pop, groovy bass, female vocal", "nostalgic", "", lang, 120, 42, inspiration=["umbrella", "last train"])
+    print(r.theme if r else None, "|", r.title if r else None); print(r.lyrics if r else w.last)

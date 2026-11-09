@@ -14,6 +14,7 @@ from engine import APP_DIR, AudioCppEngine, EngineError
 from lyrics import LyricGenerator, instrumental_title
 from genre import derive_genre
 from lyricwriter import LANGUAGE_NAMES, LANGUAGES, LyricWriter, Written, apply_language
+from themeseeds import SeedPicker
 
 DATA_DIR = APP_DIR / "data"
 OUTPUT_DIR = APP_DIR / "output"
@@ -166,6 +167,7 @@ class Radio:
         self.writer = LyricWriter()
         self.gpu_lock = threading.Lock()  # YuE2 generation and the lyric model never run at the same time
         self.lyric_cache: list[tuple[str, Written]] = []  # (settings signature, lyrics)
+        self.seeds = SeedPicker(self.rng)  # inspiration words when the station has no themes
         self.lyric_mode_used = "template"
         self._wake = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -340,24 +342,29 @@ class Radio:
     def _signature(self, s: dict) -> str:
         return json.dumps([s.get("style"), s.get("mood"), s.get("themes"), s.get("language", "English"), int(s.get("target_seconds", 120))])
 
-    def _auto_lyrics(self, s: dict) -> tuple[str, str, str]:
-        """Returns (lyrics, title, mode) for an auto song: cached LLM set, fresh LLM set, or templates."""
+    def _write_lyrics(self, s: dict) -> Written | None:
+        themes = (s.get("themes") or "").strip()
+        return self.writer.write(apply_language(s["style"], s.get("language", "English")), s["mood"], themes,
+                                 s.get("language", "English"), int(s["target_seconds"]), self.rng.randrange(1 << 30),
+                                 inspiration=None if themes else self.seeds.pick(2))
+
+    def _auto_lyrics(self, s: dict) -> tuple[str, str, str, str]:
+        """Returns (lyrics, title, mode, theme) for an auto song: cached LLM set, fresh LLM set, or templates."""
         sig = self._signature(s)
         with self.lock:
             for i, (k, w) in enumerate(self.lyric_cache):
                 if k == sig:
                     self.lyric_cache.pop(i)
                     self._prefetch_wake.set()
-                    return w.lyrics, w.title, "llm"
+                    return w.lyrics, w.title, "llm", w.theme
         if self.writer.available():
-            w = self.writer.write(apply_language(s["style"], s.get("language", "English")), s["mood"], s.get("themes", ""),
-                                  s.get("language", "English"), int(s["target_seconds"]), self.rng.randrange(1 << 30))
+            w = self._write_lyrics(s)
             if w:
-                return w.lyrics, w.title, "llm"
+                return w.lyrics, w.title, "llm", w.theme
         song = LyricGenerator(self.rng.randrange(1 << 30)).generate(s.get("themes", ""), s["mood"])
         if s.get("language", "English") != "English":
             self._record_error(f"Lyric model unavailable or failed; wrote English template lyrics instead of {s.get('language')}")
-        return song.lyrics, song.title, "template"
+        return song.lyrics, song.title, "template", (s.get("themes") or "").strip()
 
     def _prefetch_loop(self) -> None:
         """Keep up to two LLM lyric sets ready for the current settings so songs never wait on text."""
@@ -380,15 +387,14 @@ class Radio:
             if not self.gpu_lock.acquire(blocking=False):
                 continue
             try:
-                w = self.writer.write(apply_language(s["style"], s.get("language", "English")), s["mood"], s.get("themes", ""),
-                                      s.get("language", "English"), int(s["target_seconds"]), self.rng.randrange(1 << 30))
+                w = self._write_lyrics(s)
             finally:
                 self.gpu_lock.release()
             if w:
                 with self.lock:
                     if self._signature(self.settings) == sig:
                         self.lyric_cache.append((sig, w))
-                print(f"[lyrics] prefetched '{w.title}' ({w.language}) in {w.seconds:.1f}s", flush=True)
+                print(f"[lyrics] prefetched '{w.title}' ({w.language}, theme: {w.theme}) in {w.seconds:.1f}s", flush=True)
                 self._prefetch_wake.set()  # top up to two
             else:
                 time.sleep(10)
@@ -398,6 +404,7 @@ class Radio:
         language = s.get("language", "English")
         style = apply_language(s["style"], language)
         mood = s["mood"]
+        theme = ""
         self.lyric_mode_used = "custom"
         if job["kind"] == "request":
             req = job["request"]
@@ -410,7 +417,7 @@ class Radio:
             title = instrumental_title(self.rng)
             self.lyric_mode_used = "instrumental"
         else:
-            lyrics, title, self.lyric_mode_used = self._auto_lyrics(s)
+            lyrics, title, self.lyric_mode_used, theme = self._auto_lyrics(s)
         title = self._unique_title(title)
         target = int(s["target_seconds"])
         # Score planning (ABC) is reported to break pronunciation for non-English lyrics.
@@ -422,7 +429,8 @@ class Radio:
             "semantic_max_tokens": int(target * SEMANTIC_FPS),
             "semantic_min_tokens": int(max(200, target * SEMANTIC_FPS * 0.5)),
         }
-        return lyrics, style, title, options, {"genre": derive_genre(style, set(LANGUAGE_NAMES)), "language": language}
+        return lyrics, style, title, options, {"genre": derive_genre(style, set(LANGUAGE_NAMES)), "language": language,
+                                                "theme": theme}
 
     _ROMAN = ["II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
 
@@ -465,6 +473,7 @@ class Radio:
             "mood": self.settings.get("mood"),
             "genre": meta_in.get("genre", ""),
             "language": meta_in.get("language", "English"),
+            "theme": meta_in.get("theme", ""),
             "seed": options["seed"],
             "cot": options["cot"],
             "duration": round(duration, 2),

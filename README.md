@@ -93,7 +93,11 @@ Windows/Linux GPUs, CPU otherwise) and the Qwen3 1.7B instruct model at Q4_K_M
 (about 1.1 GB). For each song the station runs one short `llama-completion` process
 with a JSON-schema grammar that returns five lyric blocks (verse, chorus, verse,
 bridge, outro); the app assembles the `[Verse]`/`[Chorus]` sections YuE2 expects and
-repeats the chorus itself. Outputs are checked for script, length and repetition,
+repeats the chorus itself. When the station's lyric themes are empty, each song gets two random
+inspiration words (about 300 concrete nouns in `app/themeseeds.py`, never reused within the
+last 20 songs) and the model builds a specific theme around them; small models left to pick a
+topic themselves keep returning to the same few. The theme each song used is shown in Now
+Playing and stored on the track as `theme`. Outputs are checked for script, length and repetition,
 retried once with a higher repeat penalty, and otherwise replaced by the template
 writer. Lyric sets are prefetched while the previous song renders, so the song cycle
 time is unchanged. Nothing stays resident between calls.

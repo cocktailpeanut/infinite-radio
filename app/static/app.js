@@ -122,6 +122,7 @@
     $("np-title").textContent = t.title;
     const tags = t.style.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 7);
     $("np-meta").innerHTML = tags.map((x) => `<span class="tag">${esc(x)}</span>`).join("") +
+      (t.theme ? `<div class="np-theme">Theme: ${esc(t.theme)}</div>` : "") +
       `<div style="margin-top:8px">${fmt(t.duration)} · seed ${t.seed}${t.rtf ? ` · rendered ${(1 / t.rtf).toFixed(1)}× realtime` : ""}</div>`;
     $("lyrics").textContent = t.lyrics || "(instrumental)";
     like.classList.toggle("liked", !!t.liked);
