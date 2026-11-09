@@ -21,8 +21,15 @@ songs back to back while you listen. No cloud APIs, no accounts, no telemetry.
   station plays them next.
 - **Library.** Every song is saved as a 48 kHz stereo WAV. Bookmark, replay, download or
   delete songs from the Library tab.
-- **Dark neon player.** Generated album art per song, live waveform visualizer,
-  keyboard shortcuts (space = play/pause, `n` or → = skip, `b` = bookmark).
+- **Full-screen player.** Your scene image or loop fills the window (or a live
+  visualizer when you have no scene), with the song title in the lower corner. The
+  controls fade out after a few seconds of listening and come back when you move the
+  mouse, press a key, or tap. Station settings slide in from the left; Up next,
+  Library, Episodes and Engine from the right. On a wide screen, pin either panel to
+  keep it docked beside the player. Lyrics open as a column over the picture.
+- **Keyboard.** Space play/pause, `n` or → skip, `b` bookmark, `s` station,
+  `q` up next, `e` episodes, `l` lyrics, `v` scene or visualizer, `f` full screen,
+  Esc closes panels.
 - **DJ sets.** Press **Start a set** and everything that plays through joins the set;
   skip to cut a song, save the station to open a new section, request a track as a
   guest spot. Close the set, tidy the tracklist, and render it.
@@ -132,16 +139,18 @@ infinite_radio/
 
 ## Sets, scenes and episodes
 
-**Start a set** from the player. While it is open, the set bar shows a clock, songs
-kept and songs cut. Skip (⏭ or `n`) cuts the current song from the set and plays the
-next; a toast offers Undo. Saving the station mid-set records a new section so you
+**Start a set** from the top bar (or the off-air screen). While it is open, a pill at
+the top shows a clock, songs kept and songs cut, and the player shows titles the way
+the episode will (numbered, in your chosen title style). Skip turns into a cut button
+(scissors, or `n`): it cuts the current song from the set and plays the next; a toast
+offers Undo. Saving the station mid-set records a new section so you
 can shape an arc from mellow to energetic. **Close set** opens the tracklist: reorder,
 remove, rename, choose a crossfade, then **Render episode**.
 
 **Build from library** (Episodes tab) suggests a tracklist from bookmarked or recent
 songs for a target length, or use **Select** in the Library to pick songs by hand.
 
-**Scene** is the picture behind every episode. Drop in one file:
+**Scene** is the picture behind the player and every episode. Drop in one file:
 
 | You provide | What happens |
 |---|---|

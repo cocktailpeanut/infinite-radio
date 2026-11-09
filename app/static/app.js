@@ -62,6 +62,108 @@
     return ct.includes("json") ? res.json() : res.text();
   };
 
+  // ---------- full-screen shell: drawers, idle chrome, lyrics, full screen ----------
+  // The backdrop fills the window. Controls (.chrome) fade after a few idle seconds while a
+  // song plays and come back on mouse move, a key, or a tap. Drawers slide over the picture,
+  // or dock beside it when pinned on wide screens.
+  const body = document.body;
+  const store = {
+    get: (k, d) => { try { const v = localStorage.getItem("ir." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set: (k, v) => { try { localStorage.setItem("ir." + k, JSON.stringify(v)); } catch {} },
+  };
+  const ui = {
+    open: { station: false, side: false },
+    pinned: { station: false, side: false, ...store.get("pinned", {}) },
+    lyrics: !!store.get("lyrics", false),
+    backdrop: store.get("backdrop", "scene"),   // "scene" | "viz"
+    overChrome: false, idleTimer: null, pointer: "mouse", wokeByTap: false,
+  };
+  const wideQuery = window.matchMedia("(min-width: 1100px)");
+  const isPinned = (d) => !!ui.pinned[d] && wideQuery.matches;
+  const isOpen = (d) => ui.open[d] || isPinned(d);
+  const overlayOpen = () => ["station", "side"].some((d) => ui.open[d] && !isPinned(d));
+  const renderShell = () => {
+    for (const d of ["station", "side"]) { body.classList.toggle(`open-${d}`, isOpen(d)); body.classList.toggle(`pin-${d}`, isPinned(d)); }
+    body.classList.toggle("lyrics-open", ui.lyrics);
+    $("lyrics-panel").hidden = !ui.lyrics;
+    $("btn-lyrics").classList.toggle("on", ui.lyrics);
+    document.querySelectorAll("[data-pin]").forEach((b) => b.classList.toggle("on", !!ui.pinned[b.dataset.pin]));
+    document.querySelectorAll("[data-open]").forEach((b) => {
+      const k = b.dataset.open;
+      b.classList.toggle("on", k === "station" ? isOpen("station") : isOpen("side") && (k === "queue" ? ["queue", "library"] : [k]).includes(state.activeTab));
+    });
+  };
+  const openDrawer = (d, tab) => {
+    if (!wideQuery.matches) ui.open[d === "station" ? "side" : "station"] = false;  // one at a time on small screens
+    ui.open[d] = true;
+    if (d === "side") switchTab(tab || state.activeTab);
+    renderShell(); wake();
+  };
+  const closeDrawer = (d) => {
+    ui.open[d] = false;
+    if (ui.pinned[d]) { ui.pinned[d] = false; store.set("pinned", ui.pinned); }
+    renderShell();
+  };
+  const toggleDrawer = (d, tab) => {
+    if (d !== "side") return isOpen(d) ? closeDrawer(d) : openDrawer(d);
+    const group = tab === "queue" ? ["queue", "library"] : [tab];
+    if (isOpen("side") && group.includes(state.activeTab)) return closeDrawer("side");
+    openDrawer("side", group.includes(state.activeTab) ? state.activeTab : tab);
+  };
+  const togglePin = (d) => { ui.pinned[d] = !ui.pinned[d]; if (ui.pinned[d]) ui.open[d] = true; store.set("pinned", ui.pinned); renderShell(); };
+  const closeOverlays = () => { for (const d of ["station", "side"]) if (!isPinned(d)) ui.open[d] = false; renderShell(); };
+  const toggleLyrics = (on = !ui.lyrics) => { ui.lyrics = on; store.set("lyrics", on); renderShell(); wake(); };
+
+  const IDLE_MS = 3200;
+  const canIdle = () => !!state.track && !audio.paused && !state.setup && !overlayOpen() && !ui.overChrome &&
+    !(document.activeElement && document.activeElement.matches("input, textarea, select"));
+  const goIdle = () => { clearTimeout(ui.idleTimer); if (canIdle()) body.classList.add("idle"); else ui.idleTimer = setTimeout(goIdle, IDLE_MS); };
+  const wake = () => { body.classList.remove("idle"); clearTimeout(ui.idleTimer); ui.idleTimer = setTimeout(goIdle, IDLE_MS); };
+  document.addEventListener("pointermove", (e) => { if (!e.pointerType || e.pointerType === "mouse") wake(); }, { passive: true });
+  document.addEventListener("pointerdown", (e) => {
+    ui.pointer = e.pointerType || "mouse";
+    if (ui.pointer !== "mouse" && body.classList.contains("idle")) { wake(); ui.wokeByTap = true; setTimeout(() => { ui.wokeByTap = false; }, 700); }
+  }, true);
+  document.querySelectorAll(".chrome, .setbar, .drawer").forEach((el) => {
+    el.addEventListener("pointerenter", () => { ui.overChrome = true; });
+    el.addEventListener("pointerleave", () => { ui.overChrome = false; });
+  });
+  // Clicking the picture closes floating drawers; on touch screens a tap shows or hides the controls.
+  $("main").addEventListener("click", (e) => {
+    if (e.target.closest(".chrome, .np, .hero, .setup, .lyrics-panel, .setbar")) return;
+    if (ui.wokeByTap) { ui.wokeByTap = false; return; }
+    if (overlayOpen()) { closeOverlays(); wake(); return; }
+    if (ui.pointer !== "mouse" && canIdle()) { clearTimeout(ui.idleTimer); body.classList.add("idle"); }
+  });
+
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const fsOk = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  const toggleFull = () => {
+    if (!fsOk) return;
+    if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else { const el = document.documentElement, r = (el.requestFullscreen || el.webkitRequestFullscreen).call(el); if (r && r.catch) r.catch(() => {}); }
+  };
+  if (!fsOk) $("btn-full").hidden = true;
+  ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => $("btn-full").classList.toggle("on", !!fsEl())));
+
+  const sceneShown = () => !!state.scene && state.scene.kind !== "none" && ui.backdrop !== "viz";
+  const toggleBackdrop = () => {
+    if (!state.scene || state.scene.kind === "none") return toast("Add a scene under Episodes to put a picture or loop behind the player.", true);
+    ui.backdrop = ui.backdrop === "viz" ? "scene" : "viz"; store.set("backdrop", ui.backdrop);
+    $("scene-live").checked = ui.backdrop !== "viz";
+    renderStage(true);
+  };
+
+  document.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => (b.dataset.open === "station" ? toggleDrawer("station") : toggleDrawer("side", b.dataset.open)); });
+  document.querySelectorAll("[data-close]").forEach((b) => { b.onclick = () => closeDrawer(b.dataset.close); });
+  document.querySelectorAll("[data-pin]").forEach((b) => { b.onclick = () => togglePin(b.dataset.pin); });
+  $("btn-lyrics").onclick = () => toggleLyrics();
+  $("lyrics-close").onclick = () => toggleLyrics(false);
+  $("btn-full").onclick = toggleFull;
+  $("next-chip").onclick = () => openDrawer("side", "queue");
+  $("engine-pill").onclick = () => openDrawer("side", "engine");
+  wideQuery.addEventListener("change", renderShell);
+
   // ---------- visualizer ----------
   let actx, analyser, srcNode;
   const canvas = $("viz"), ctx = canvas.getContext("2d");
@@ -81,12 +183,16 @@
     requestAnimationFrame(draw);
     if (ts - lastDraw < 33 || document.hidden) return;
     lastDraw = ts;
+    if (!canvas.offsetParent) return;  // a scene is showing instead
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cw = Math.round(canvas.clientWidth * dpr), ch = Math.round(canvas.clientHeight * dpr);
+    if (cw && ch && (canvas.width !== cw || canvas.height !== ch)) { canvas.width = cw; canvas.height = ch; }
     const w = canvas.width, h = canvas.height;
     ctx.clearRect(0, 0, w, h);
     if (!analyser) return;
     const data = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(data);
-    const bars = 64, gap = 4, bw = (w - gap * (bars - 1)) / bars;
+    const bars = 64, gap = 4 * dpr, bw = (w - gap * (bars - 1)) / bars;
     const [c1, c2] = state.track ? colorsFor(state.track.id) : ["#8b5cf6", "#22d3ee"];
     const grad = ctx.createLinearGradient(0, 0, w, 0);
     grad.addColorStop(0, c1); grad.addColorStop(1, c2);
@@ -94,9 +200,9 @@
     for (let i = 0; i < bars; i++) {
       const idx = Math.floor((i / bars) * data.length * 0.8);
       const v = audio.paused ? 2 : data[idx] / 255;
-      const bh = Math.max(3, v * h);
+      const bh = Math.max(3 * dpr, v * h);
       ctx.globalAlpha = 0.35 + v * 0.65;
-      ctx.beginPath(); ctx.roundRect(i * (bw + gap), (h - bh) / 2, bw, bh, 3); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(i * (bw + gap), (h - bh) / 2, bw, bh, 3 * dpr); ctx.fill();
     }
     ctx.globalAlpha = 1;
   };
@@ -104,33 +210,49 @@
 
   // ---------- now playing ----------
   const setArt = (id) => { const [c1, c2] = colorsFor(id); $("art").style.setProperty("--c1", c1); $("art").style.setProperty("--c2", c2); };
+  // Title style and subtitle: in a set they follow the episode settings, otherwise Minimal with the genre.
+  const renderTitle = () => {
+    const t = state.track, sc = state.scene, inSet = !!state.set && !!t;
+    const style = inSet ? ((sc && sc.settings && sc.settings.title_style) || "minimal") : "minimal";
+    $("np").className = `np style-${style}`;
+    $("np-n").hidden = !inSet;
+    if (inSet) $("np-n").textContent = String(Math.max(1, state.set.kept || 0)).padStart(2, "0");
+    let sub = "";
+    if (t) {
+      const src = inSet ? ((sc && sc.settings && sc.settings.subtitle) || "none") : "genre";
+      sub = subtitleFor(t, src) || (inSet ? "" : subtitleFor(t, "mood"));
+    }
+    $("np-sub").textContent = sub; $("np-sub").hidden = !sub;
+  };
   const renderNowPlaying = () => {
     const t = state.track, like = $("btn-like"), dl = $("btn-download"), skip = $("btn-skip");
     const inSet = !!state.set;
     skip.classList.toggle("cut", inSet);
-    skip.title = inSet ? "Cut from the set (skips too)" : "Skip";
+    skip.title = inSet ? "Cut from the set, skips too (N)" : "Skip (N)";
+    body.classList.toggle("has-track", !!t);
     if (!t) {
       $("np-kicker").textContent = state.listening ? (state.buffering ? "Buffering" : "On air") : "Nothing playing";
       $("np-title").textContent = state.listening ? "Your first song is being composed…" : "Tune in to start the station";
       $("np-meta").innerHTML = ""; $("lyrics").textContent = "—";
       like.setAttribute("aria-disabled", "true"); dl.setAttribute("aria-disabled", "true");
       skip.setAttribute("aria-disabled", state.listening ? "false" : "true");
-      setArt("idle");
+      setArt("idle"); renderTitle();
+      document.title = "Infinite Radio";
       return;
     }
     $("np-kicker").textContent = t.kind === "request" ? "Your request" : (t.lyrics ? "Now playing" : "Instrumental");
     $("np-title").textContent = t.title;
-    const tags = t.style.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 7);
-    $("np-meta").innerHTML = tags.map((x) => `<span class="tag">${esc(x)}</span>`).join("") +
-      (t.theme ? `<div class="np-theme">Theme: ${esc(t.theme)}</div>` : "") +
-      `<div style="margin-top:8px">${fmt(t.duration)} · seed ${t.seed}${t.rtf ? ` · rendered ${(1 / t.rtf).toFixed(1)}× realtime` : ""}</div>`;
+    const tags = t.style.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 5);
+    $("np-meta").innerHTML = (t.theme ? `<div class="np-theme">Theme: ${esc(t.theme)}</div>` : "") +
+      `<div>${esc(tags.join(" · "))}</div>` +
+      `<div>${fmt(t.duration)} · seed ${t.seed}${t.rtf ? ` · rendered ${(1 / t.rtf).toFixed(1)}× realtime` : ""}</div>`;
     $("lyrics").textContent = t.lyrics || "(instrumental)";
     like.classList.toggle("liked", !!t.liked);
     like.setAttribute("aria-disabled", "false"); dl.setAttribute("aria-disabled", "false");
     dl.href = `/api/tracks/${t.id}/audio?download=1`;
     skip.setAttribute("aria-disabled", "false");
-    setArt(t.id);
-    if (state.set) renderStage();
+    setArt(t.id); renderTitle();
+    document.title = `${t.title} · Infinite Radio`;
   };
 
   // ---------- lists ----------
@@ -179,6 +301,23 @@
       speed = `Generation speed: ${x.toFixed(2)}× realtime on ${st.engine.hardware}.` + (x >= 1 ? " Faster than playback, the queue stays full." : " Slower than playback, so the station buffers ahead between songs.");
     } else if (st.on) speed = `Measuring generation speed on ${st.engine.hardware}…`;
     $("speed").textContent = speed;
+    renderNextChip(st);
+  };
+  const renderNextChip = (st) => {
+    const ready = st.ready || [], cur = st.current;
+    let text = "", frac = 0;
+    if (ready.length) { text = `Next · ${ready[0].title}${ready.length > 1 ? ` +${ready.length - 1}` : ""}`; frac = 1; }
+    else if (cur) {
+      text = st.engine.state === "loading" ? "Loading the model" : `Composing next · ${cur.title}`;
+      if (cur.eta_seconds != null) {
+        frac = Math.min(0.97, cur.elapsed / Math.max(1, cur.elapsed + cur.eta_seconds));
+        if (cur.eta_seconds > 1) text += ` · ~${Math.ceil(cur.eta_seconds)}s`;
+      }
+    } else if (st.on) text = "Waiting for the next song";
+    $("next-chip").hidden = !text;
+    $("next-text").textContent = text;
+    $("next-chip").title = `${text} (Q)`;
+    $("next-ring").setAttribute("stroke-dasharray", `${Math.round(frac * 100)} 100`);
   };
 
   const renderLibrary = async () => {
@@ -216,13 +355,15 @@
     $("f-lookahead").value = String(s.lookahead); $("f-planning").checked = !!s.planning;
     if (s.language) $("f-language").value = s.language;
     updateLanguageNotes();
-    document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.style === s.style));
+    document.querySelectorAll("#presets .chip").forEach((c) => c.classList.toggle("active", c.dataset.style === s.style));
   };
 
   // ---------- DJ set ----------
   const renderSetBar = () => {
     const s = state.set, bar = $("setbar");
     $("btn-set-start").hidden = !!s || !!state.setup;
+    $("btn-set-top").hidden = !!s || !!state.setup || !state.listening;
+    body.classList.toggle("in-set", !!s);
     bar.hidden = !s;
     if (!s) return;
     $("setbar-name").textContent = s.name;
@@ -245,6 +386,8 @@
     const on = !!state.setup;
     $("setup").hidden = !on;
     $("btn-set-start").hidden = on || !!state.set;
+    $("btn-set-top").hidden = on || !!state.set || !state.listening;
+    body.classList.toggle("setup-open", on);
     if (!on) return;
     const sc = state.scene;
     $("su-scene").textContent = !sc || sc.kind === "none" ? "none yet (a mood-colored card is used)" : `${sc.kind === "image" ? "image" : "loop"} · ${sc.original_name || sc.file}`;
@@ -259,17 +402,17 @@
     state.setup = true;
     $("su-name").value = `${(state.status?.settings?.name) || "Infinite Radio"} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
     try { if (!state.scene) state.scene = await api("/api/scene"); } catch {}
-    renderSetup(); renderStage(true);
-    $("setup").scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!wideQuery.matches) closeOverlays();
+    renderSetup(); renderStage(true); wake();
   };
   const closeSetup = () => { state.setup = false; renderSetup(); renderStage(true); };
   const startSet = openSetup;
   $("su-cancel").onclick = closeSetup;
   $("su-edit").onclick = () => {
-    const panel = document.querySelector(".station");
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    openDrawer("station");
+    const panel = $("drawer-station");
     panel.classList.remove("flash"); void panel.offsetWidth; panel.classList.add("flash");
-    $("f-style").focus({ preventScroll: true });
+    setTimeout(() => $("f-style").focus({ preventScroll: true }), 340);
   };
   $("su-file").onchange = async (ev) => {
     const f = ev.target.files[0]; if (!f) return;
@@ -294,14 +437,15 @@
   const closeSet = async () => {
     try {
       const s = await api("/api/sets/close", { method: "POST" });
-      state.set = null; renderSetBar();
+      state.set = null; renderSetBar(); renderNowPlaying();
       await refresh();
-      switchTab("episodes");
+      openDrawer("side", "episodes");
       await openSetEditor(s.id);
       toast("Set closed. Review the tracklist, then render.", true);
     } catch (e) { toast(e.message); }
   };
   $("btn-set-start").onclick = startSet;
+  $("btn-set-top").onclick = startSet;
   $("btn-set-close").onclick = closeSet;
 
   // ---------- scene ----------
@@ -313,6 +457,8 @@
     else if (sc.kind === "video") prev.innerHTML = `<video src="/api/scene/preview?${Date.now()}" muted loop autoplay playsinline></video>`;
     else prev.innerHTML = `<span class="hint">No scene yet. A mood-colored title card is used.</span>`;
     $("scene-clear").hidden = sc.kind === "none";
+    $("scene-live-row").hidden = sc.kind === "none";
+    $("scene-live").checked = ui.backdrop !== "viz";
     const box = $("scene-settings");
     box.className = `scene-settings is-${sc.kind}`;
     box.querySelectorAll("[data-scene]").forEach((el) => {
@@ -329,6 +475,7 @@
     catch (e) { toast(e.message); }
     ev.target.value = "";
   };
+  $("scene-live").onchange = () => { ui.backdrop = $("scene-live").checked ? "scene" : "viz"; store.set("backdrop", ui.backdrop); renderStage(true); };
   $("scene-clear").onclick = async () => { state.scene = await api("/api/scene", { method: "DELETE" }); renderScene(); renderStage(true); };
   $("scene-settings").addEventListener("change", async (ev) => {
     const el = ev.target.closest("[data-scene]"); if (!el) return;
@@ -401,7 +548,7 @@
   const openCustomEditor = (name, tracks) => {
     state.editor = { kind: "custom", setId: null, name, tracks };
     renderEditor();
-    switchTab("episodes");
+    openDrawer("side", "episodes");
     $("ep-editor").scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -499,7 +646,15 @@
       $("onair").className = "status " + (st.on ? "on" : "off");
       $("btn-tune").hidden = state.listening;
       $("btn-tune").textContent = st.on && !state.listening ? "Tune in (station is on air)" : "Tune in";
-      $("btn-stop").hidden = !st.on;
+      // Power button: goes off air while you listen; tunes back in after (the hero covers the no-song case).
+      const live = st.on && state.listening, pw = $("btn-stop");
+      pw.hidden = !st.on && !state.track;
+      pw.classList.toggle("off", !live);
+      pw.title = live ? "Go off air" : "Tune in"; pw.setAttribute("aria-label", pw.title);
+      body.classList.toggle("on-air", !!st.on);
+      $("hero-station").textContent = (st.settings && st.settings.name) || "Infinite Radio";
+      $("hero-vibe").textContent = describeVibe(st.settings);
+      $("open-episodes").classList.toggle("busy", !!st.rendering);
       const hadSet = !!state.set;
       state.set = st.set;
       if (st.set && state.setup) { state.setup = false; }
@@ -514,7 +669,7 @@
         const cur = st.current;
         $("buffering-text").textContent = cur ? (st.engine.state === "loading" ? "Loading the model for the first song…" : `Composing "${cur.title}"${cur.eta_seconds > 1 ? ` · ~${Math.ceil(cur.eta_seconds)}s` : ""}`) : (st.on ? "Waiting for the next song…" : "Station is off air");
       }
-      if (state.activeTab === "episodes" && (st.rendering || state.episodes.some((j) => !["done", "error"].includes(j.status)))) loadEpisodes();
+      if (state.activeTab === "episodes" && isOpen("side") && (st.rendering || state.episodes.some((j) => !["done", "error"].includes(j.status)))) loadEpisodes();
     } catch (e) {
       $("engine-pill").textContent = "server unreachable";
       $("engine-pill").className = "status error";
@@ -556,9 +711,10 @@
     setTimeout(ambSync, 0);
     if (state.track && state.set) api("/api/player/ended", { method: "POST", body: { track_id: state.track.id } }).catch(() => {});
     if (state.listening) playNext();
+    else { state.track = null; renderNowPlaying(); }  // off air and the last song ended: back to the tune-in screen
   });
-  audio.addEventListener("play", () => { $("art").classList.add("playing"); $("btn-play").classList.remove("paused"); $("btn-play").querySelector(".play-icon").textContent = "❚❚"; });
-  audio.addEventListener("pause", () => { $("art").classList.remove("playing"); $("btn-play").classList.add("paused"); $("btn-play").querySelector(".play-icon").textContent = "▶"; });
+  audio.addEventListener("play", () => { $("art").classList.add("playing"); $("btn-play").classList.remove("paused"); wake(); });
+  audio.addEventListener("pause", () => { $("art").classList.remove("playing"); $("btn-play").classList.add("paused"); wake(); });
   const FADE = 2.5;
   audio.addEventListener("timeupdate", () => {
     if (audio.duration) {
@@ -566,7 +722,11 @@
       audio.volume = Math.min(1, Math.max(0.05, Math.min(left / FADE, (audio.currentTime + 0.15) / 0.6)));
     }
     $("t-cur").textContent = fmt(audio.currentTime); $("t-dur").textContent = fmt(audio.duration);
-    if (audio.duration) $("seek").value = Math.floor((audio.currentTime / audio.duration) * 1000);
+    if (audio.duration) {
+      const pct = (audio.currentTime / audio.duration) * 100;
+      $("seek").value = Math.floor(pct * 10); $("seek").style.setProperty("--p", `${pct}%`);
+      $("hairline-fill").style.width = `${pct}%`;
+    }
   });
   $("seek").addEventListener("input", () => { if (audio.duration) audio.currentTime = ($("seek").value / 1000) * audio.duration; });
 
@@ -593,7 +753,10 @@
     } catch (e) { toast(e.message); }
   };
   $("btn-tune").onclick = tuneIn;
-  $("btn-stop").onclick = async () => { await api("/api/station/off", { method: "POST" }); state.listening = false; setBuffering(false); ambSync(); refresh(); };
+  $("btn-stop").onclick = async () => {
+    if ($("btn-stop").classList.contains("off")) return tuneIn();
+    await api("/api/station/off", { method: "POST" }); state.listening = false; setBuffering(false); ambSync(); refresh();
+  };
 
   // ---------- settings ----------
   const formPatch = () => ({ style: $("f-style").value.trim(), mood: $("f-mood").value, lyric_mode: $("f-lyric-mode").value, themes: $("f-themes").value.trim(), target_seconds: Number($("f-len").value), lookahead: Number($("f-lookahead").value), planning: $("f-planning").checked, language: $("f-language").value });
@@ -627,7 +790,7 @@
     $("f-mood").innerHTML = p.moods.map((m) => `<option value="${m}">${m[0].toUpperCase() + m.slice(1)}</option>`).join("");
     $("f-language").innerHTML = state.languages.map((l) => `<option value="${l.name}">${l.name}${l.tier === "evaluated" ? "" : l.tier === "demo" ? " · demo" : l.tier === "reported" ? " · reported" : " · untested"}</option>`).join("");
     $("presets").innerHTML = p.presets.map((x) => `<button class="chip" data-style="${esc(x.style)}" data-mood="${x.mood}">${esc(x.name)}</button>`).join("");
-    document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { $("f-style").value = c.dataset.style; $("f-mood").value = c.dataset.mood; state.settingsDirty = true; saveSettings(); });
+    document.querySelectorAll("#presets .chip").forEach((c) => c.onclick = () => { $("f-style").value = c.dataset.style; $("f-mood").value = c.dataset.mood; state.settingsDirty = true; saveSettings(); });
   };
 
   // ---------- requests ----------
@@ -678,15 +841,31 @@
     if (name === "library") renderLibrary();
     if (name === "engine" && state.status) { renderEngine(state.status); loadAmbience(); }
     if (name === "episodes") { loadScene(); loadEpisodes(); loadAmbience(); }
+    renderShell();
   };
   document.querySelectorAll(".tab").forEach((tab) => tab.onclick = () => switchTab(tab.dataset.tab));
   $("engine-restart").onclick = async () => { try { await api("/api/engine/restart", { method: "POST" }); toast("audio.cpp restarted", true); refresh(); } catch (e) { toast(e.message); } };
 
   document.addEventListener("keydown", (e) => {
-    if (e.target.matches("input, textarea, select")) return;
+    wake();
+    if (e.key === "Escape") {
+      if (state.setup) closeSetup();
+      else if (overlayOpen()) closeOverlays();
+      else if (ui.lyrics) toggleLyrics(false);
+      if (e.target.matches("input, textarea, select")) e.target.blur();
+      return;
+    }
+    if (e.target.matches("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
     if (e.code === "Space") { e.preventDefault(); $("btn-play").click(); }
-    if (e.key === "n" || e.key === "ArrowRight") $("btn-skip").click();
-    if (e.key === "l" || e.key === "b") $("btn-like").click();
+    else if (k === "n" || e.key === "ArrowRight") $("btn-skip").click();
+    else if (k === "b") $("btn-like").click();
+    else if (k === "s") toggleDrawer("station");
+    else if (k === "q") toggleDrawer("side", "queue");
+    else if (k === "e") toggleDrawer("side", "episodes");
+    else if (k === "l") toggleLyrics();
+    else if (k === "f") toggleFull();
+    else if (k === "v") toggleBackdrop();
   });
 
   // ---------- stage: live preview of the episode look during a set ----------
@@ -694,8 +873,9 @@
   let fxParticles = null, fxKind = "none", fxRunning = false, stageSceneKey = "";
   const initFx = (kind, density) => {
     const W = fxCanvas.width = fxCanvas.clientWidth || 760, H = fxCanvas.height = fxCanvas.clientHeight || 428;
-    const counts = { rain: 260, snow: 110, leaves: 30, dust: 70 };
-    const n = Math.round((counts[kind] || 0) * (0.35 + density));
+    const counts = { rain: 480, snow: 220, leaves: 60, dust: 140 };  // episode renderer at 1920x1080
+    const area = Math.min(1.5, Math.max(0.2, (W * H) / (1920 * 1080)));
+    const n = Math.round((counts[kind] || 0) * (0.35 + density) * area);
     fxParticles = Array.from({ length: n }, () => ({ x: Math.random() * W, y: Math.random() * H, v: kind === "rain" ? 7 + Math.random() * 6 : kind === "dust" ? 0.25 + Math.random() * 0.4 : 0.7 + Math.random() * 1.1, len: 10 + Math.random() * 16, a: 0.25 + Math.random() * 0.45, ph: Math.random() * 6.28 }));
     fxKind = kind;
   };
@@ -724,17 +904,23 @@
     }
   };
   const renderStage = (force = false) => {
-    const inSet = !!state.set || !!state.setup, stage = $("stage"), wrap = $("art-wrap");
-    wrap.hidden = inSet; stage.hidden = !inSet;
-    if (!inSet) { fxRunning = false; $("stage-video").pause(); return; }
+    const stage = $("stage"), wrap = $("art-wrap"), sc = state.scene;
+    if (!sc) {
+      if (!state.sceneLoading) {
+        state.sceneLoading = true;
+        api("/api/scene").then((x) => { state.scene = x; renderScene(); renderStage(true); }).catch(() => {}).finally(() => { state.sceneLoading = false; });
+      }
+      return;
+    }
+    const show = sceneShown();
+    body.classList.toggle("has-scene", show);
+    wrap.hidden = show; stage.hidden = !show;
     $("stage-station").textContent = (state.status?.settings?.name) || "Infinite Radio";
-    const sc = state.scene;
-    if (!sc) { api("/api/scene").then((x) => { state.scene = x; renderStage(true); }).catch(() => {}); return; }
+    if (!show) { fxRunning = false; $("stage-video").pause(); stageSceneKey = ""; renderTitle(); return; }
     const key = `${sc.kind}:${sc.file}:${JSON.stringify(sc.settings)}`;
     if (force || key !== stageSceneKey) {
       stageSceneKey = key;
       const img = $("stage-img"), vid = $("stage-video"), st = sc.settings;
-      stage.classList.toggle("has-scene", sc.kind !== "none");
       stage.classList.toggle("grain", !!st.grain);
       const gif = isGif(sc);
       img.hidden = !(sc.kind === "image" || gif); vid.hidden = sc.kind !== "video" || gif;
@@ -753,19 +939,13 @@
       }
       if (!fxRunning) { fxRunning = true; requestAnimationFrame(fxLoop); }
     }
-    const t = state.track, card = $("stage-card");
-    const titleStyle = sc.settings.title_style || "minimal";
-    card.hidden = !t || !state.set || titleStyle === "none";
-    card.className = `stage-card ${titleStyle}`;
-    if (t && state.set) {
-      const n = String(Math.max(1, state.set.kept || 0)).padStart(2, "0");
-      $("stage-num").textContent = n; $("stage-n").textContent = n;
-      $("stage-title").textContent = t.title;
-      const sub = subtitleFor(t, sc.settings.subtitle || "none");
-      $("stage-tags").textContent = sub; $("stage-tags").hidden = !sub;
-    }
+    renderTitle();
   };
-  window.addEventListener("resize", () => { if (state.set && state.scene) renderStage(true); });
+  // Weather particles follow the window size (drawers pinning or unpinning change it too).
+  new ResizeObserver(() => {
+    const sc = state.scene;
+    if (sceneShown() && sc.kind === "image") initFx(sc.settings.weather || "none", Number(sc.settings.weather_density ?? 0.6));
+  }).observe($("main"));
 
   // ---------- ambience: panel ----------
   const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
@@ -849,7 +1029,7 @@
     if (!confirm("Remove the ambience model (1.7 GB)? Ambience you already generated keeps working; generating new ones downloads it again.")) return;
     try { const r = await api("/api/ambience/model", { method: "DELETE" }); state.amb = r; renderAmbience(); toast("Ambience model removed.", true); } catch (e) { toast(e.message); }
   };
-  $("su-amb-edit").onclick = () => { switchTab("episodes"); setTimeout(() => $("amb-section").scrollIntoView({ behavior: "smooth", block: "start" }), 50); };
+  $("su-amb-edit").onclick = () => { openDrawer("side", "episodes"); setTimeout(() => $("amb-section").scrollIntoView({ behavior: "smooth", block: "start" }), 120); };
   const onAmbienceStatus = (brief) => {
     if (!brief) return;
     const prev = state.ambBrief; state.ambBrief = brief;
@@ -937,7 +1117,9 @@
   setInterval(ambDuck, 500);
 
   // ---------- boot ----------
+  renderShell();
   loadPresets().then(refresh);
   setInterval(refresh, 1500);
   renderNowPlaying();
+  renderStage();
 })();

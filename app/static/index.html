@@ -2,29 +2,174 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Infinite Radio</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="bg-glow" aria-hidden="true"></div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-station" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6h13M4 11h13M4 16h7"/><path d="M15 14.5v6l5-3z"/></symbol>
+  <symbol id="i-episodes" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></symbol>
+  <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M4 6h16M4 10.5h16M4 15h11M4 19.5h7"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3.5h6l-1 6.5 3.5 3.5h-11L10 10z"/><path d="M12 13.5V21"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-skip" viewBox="0 0 24 24"><path d="M6 5.5v13l9.5-6.5z" fill="currentColor" stroke="none"/><path d="M18 5.5v13"/></symbol>
+  <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.6 7.6 20 18M8.6 16.4 20 6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+</svg>
 
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-dot"></span>
-    <span class="brand-name">INFINITE<span>RADIO</span></span>
+<div class="main" id="main">
+  <!-- Backdrop: your scene, or the visualizer when there is none -->
+  <div class="backdrop">
+    <div class="art-wrap" id="art-wrap">
+      <div id="art" class="art">
+        <div class="art-ring"></div>
+        <div class="art-core"></div>
+      </div>
+      <canvas id="viz" width="900" height="160"></canvas>
+    </div>
+    <div class="stage" id="stage" hidden>
+      <img id="stage-img" alt="" hidden>
+      <video id="stage-video" muted loop playsinline hidden></video>
+      <canvas id="stage-fx"></canvas>
+      <div class="stage-vignette"></div>
+      <div class="stage-lockup">INFINITE RADIO · <span id="stage-station">Infinite Radio</span></div>
+    </div>
   </div>
-  <div class="status-line">
-    <span id="onair" class="status off">Off air</span>
-    <span class="sep" aria-hidden="true">·</span>
-    <span id="engine-pill" class="status" title="audio.cpp engine">engine starting</span>
-  </div>
-</header>
+  <div class="scrim top" aria-hidden="true"></div>
+  <div class="scrim bottom" aria-hidden="true"></div>
 
-<main class="layout">
-  <!-- Station controls -->
-  <aside class="panel station">
+  <header class="topbar chrome">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">INFINITE<span>RADIO</span></span>
+    </div>
+    <div class="status-line">
+      <span id="onair" class="status off">Off air</span>
+      <span class="sep" aria-hidden="true">·</span>
+      <span id="engine-pill" class="status" title="audio.cpp engine">engine starting</span>
+    </div>
+    <div class="top-actions">
+      <button id="btn-set-top" class="btn btn-ghost small" hidden>Start a set</button>
+      <button class="ibtn" data-open="station" title="Station (S)" aria-label="Station"><svg class="ico"><use href="#i-station"/></svg></button>
+      <button class="ibtn" data-open="queue" title="Up next and library (Q)" aria-label="Up next and library"><svg class="ico"><use href="#i-queue"/></svg></button>
+      <button class="ibtn" data-open="episodes" id="open-episodes" title="Episodes (E)" aria-label="Episodes"><svg class="ico"><use href="#i-episodes"/></svg></button>
+      <button class="ibtn" id="btn-lyrics" title="Lyrics (L)" aria-label="Lyrics"><svg class="ico"><use href="#i-lyrics"/></svg></button>
+      <button class="ibtn" id="btn-full" title="Full screen (F)" aria-label="Full screen"><svg class="ico"><use href="#i-full"/></svg></button>
+      <button class="ibtn" id="btn-stop" title="Go off air" aria-label="Go off air" hidden><svg class="ico"><use href="#i-power"/></svg></button>
+    </div>
+  </header>
+
+  <div id="setbar" class="setbar" title="Everything that plays through is in the set. Skip cuts a song; saving the station starts a new section." hidden>
+    <span class="rec-dot"></span>
+    <span class="setbar-name" id="setbar-name">Set</span>
+    <span class="setbar-meta"><span id="setbar-clock">00:00</span><span id="setbar-plan"></span> · <span id="setbar-kept">0 kept</span> · <span id="setbar-cut">0 cut</span></span>
+    <button id="btn-set-close" class="linkish">Close set</button>
+  </div>
+
+  <!-- Off air or waiting for the first song -->
+  <section class="hero" id="hero">
+    <div class="hero-kicker">Station</div>
+    <div class="hero-title" id="hero-station">Infinite Radio</div>
+    <div class="hero-vibe" id="hero-vibe"></div>
+    <div class="tune-row">
+      <button id="btn-tune" class="btn btn-primary">Tune in</button>
+      <button id="btn-set-start" class="btn btn-ghost">Start a set</button>
+    </div>
+    <div id="buffering" class="buffering" hidden>
+      <span class="spinner"></span>
+      <span id="buffering-text">Buffering first song…</span>
+    </div>
+  </section>
+
+  <!-- Now playing: lower third -->
+  <div class="np" id="np">
+    <div class="np-kicker" id="np-kicker">Nothing playing</div>
+    <h1 class="np-title"><span class="np-n" id="np-n" hidden>01</span><span id="np-title">Tune in to start the station</span></h1>
+    <div class="np-sub" id="np-sub" hidden></div>
+    <div class="np-meta" id="np-meta"></div>
+  </div>
+
+  <aside class="lyrics-panel" id="lyrics-panel" hidden>
+    <div class="lp-head"><h3>Lyrics</h3><button class="ibtn small" id="lyrics-close" title="Close (L)" aria-label="Close lyrics"><svg class="ico"><use href="#i-close"/></svg></button></div>
+    <pre id="lyrics" class="lyrics">—</pre>
+  </aside>
+
+  <footer class="dock chrome">
+    <div class="progress">
+      <span id="t-cur">0:00</span>
+      <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+      <span id="t-dur">0:00</span>
+    </div>
+    <div class="dock-row">
+      <div class="dock-side"></div>
+      <div class="transport">
+        <button id="btn-like" class="icon-btn" title="Bookmark (B)" aria-label="Bookmark"><svg class="bm" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+        <button id="btn-play" class="play-btn paused" title="Play / pause (Space)" aria-label="Play or pause">
+          <svg class="ico i-play"><use href="#i-play"/></svg><svg class="ico i-pause"><use href="#i-pause"/></svg>
+        </button>
+        <button id="btn-skip" class="icon-btn" title="Skip (N)" aria-label="Skip"><svg class="ico i-skip"><use href="#i-skip"/></svg><svg class="ico i-cut"><use href="#i-cut"/></svg></button>
+        <a id="btn-download" class="icon-btn" title="Download WAV" aria-label="Download WAV" download><svg class="ico"><use href="#i-download"/></svg></a>
+      </div>
+      <div class="dock-side right">
+        <button id="next-chip" class="next-chip" title="Up next (Q)" hidden>
+          <svg class="ring" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><circle id="next-ring" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="0 100"/></svg>
+          <span id="next-text"></span>
+        </button>
+      </div>
+    </div>
+  </footer>
+  <div class="hairline" aria-hidden="true"><div id="hairline-fill"></div></div>
+
+  <!-- Set setup sheet: the scene shows behind it -->
+  <div id="setup" class="setup" hidden>
+    <h2>Start a set</h2>
+    <div class="setup-grid">
+      <label class="field"><span>Set name</span><input id="su-name" type="text" autocomplete="off"></label>
+      <label class="field"><span>Planned length</span>
+        <select id="su-length"><option value="0">Open-ended</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option><option value="90">90 min</option><option value="120">2 hours</option></select>
+      </label>
+    </div>
+    <div class="setup-line">
+      <span class="k">Scene</span>
+      <span id="su-scene">—</span>
+      <label class="linkish file-btn">Change image or loop<input id="su-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,image/gif" hidden></label>
+      <button id="su-scene-clear" class="linkish" hidden>Remove</button>
+    </div>
+    <div class="setup-line">
+      <span class="k">Opening section</span>
+      <span id="su-vibe">—</span>
+      <button id="su-edit" class="linkish">Edit in Station</button>
+    </div>
+    <div class="setup-line">
+      <span class="k">Ambience</span>
+      <span id="su-amb">Off</span>
+      <button id="su-amb-edit" class="linkish">Change</button>
+    </div>
+    <p class="hint">Your station settings become the first section. Save the station during the set to start a new section; skip cuts a song from the set.</p>
+    <div class="setup-actions">
+      <button id="su-cancel" class="linkish">Cancel</button>
+      <button id="su-start" class="btn btn-primary">Start set</button>
+    </div>
+  </div>
+  <audio id="audio" preload="auto"></audio>
+</div>
+
+<!-- Station drawer -->
+<aside class="drawer left station" id="drawer-station" aria-label="Station">
+  <div class="drawer-head">
     <h2>Station</h2>
+    <div class="drawer-tools">
+      <button class="ibtn small pin" data-pin="station" title="Keep open beside the player" aria-label="Pin"><svg class="ico"><use href="#i-pin"/></svg></button>
+      <button class="ibtn small" data-close="station" title="Close (Esc)" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button>
+    </div>
+  </div>
+  <div class="drawer-body">
     <p class="hint">Describe the vibe. Write the style prompt in English; the lyric language is chosen below.</p>
 
     <div class="presets" id="presets"></div>
@@ -60,27 +205,29 @@
       <small id="f-lang-note" class="field-note"></small>
     </label>
 
-    <label class="field range">
-      <span>Target length <b id="f-len-label">2:00</b></span>
-      <input id="f-len" type="range" min="30" max="360" step="15" value="120">
-    </label>
-
-    <div class="row2">
-      <label class="field">
-        <span>Buffer ahead</span>
-        <select id="f-lookahead">
-          <option value="1">1 song</option>
-          <option value="2">2 songs</option>
-          <option value="3">3 songs</option>
-          <option value="4">4 songs</option>
-        </select>
+    <details class="more">
+      <summary>Length, buffer and planning</summary>
+      <label class="field range">
+        <span>Target length <b id="f-len-label">2:00</b></span>
+        <input id="f-len" type="range" min="30" max="360" step="15" value="120">
       </label>
-      <label class="field check">
-        <span>Score planning</span>
-        <input id="f-planning" type="checkbox">
-        <small id="f-planning-note">Slower, more structured songs</small>
-      </label>
-    </div>
+      <div class="row2">
+        <label class="field">
+          <span>Buffer ahead</span>
+          <select id="f-lookahead">
+            <option value="1">1 song</option>
+            <option value="2">2 songs</option>
+            <option value="3">3 songs</option>
+            <option value="4">4 songs</option>
+          </select>
+        </label>
+        <label class="field check">
+          <span>Score planning</span>
+          <input id="f-planning" type="checkbox">
+          <small id="f-planning-note">Slower, more structured songs</small>
+        </label>
+      </div>
+    </details>
 
     <button id="save" class="btn btn-ghost">Save station</button>
     <p id="save-note" class="hint ok" hidden>Saved. New songs use these settings.</p>
@@ -95,116 +242,24 @@
       <button id="r-send" class="btn btn-ghost">Queue request</button>
       <ul id="r-list" class="mini-list"></ul>
     </details>
-  </aside>
+  </div>
+</aside>
 
-  <!-- Now playing -->
-  <section class="panel player">
-    <div class="art-wrap" id="art-wrap">
-      <div id="art" class="art">
-        <div class="art-ring"></div>
-        <div class="art-core"></div>
-      </div>
-      <canvas id="viz" width="900" height="160"></canvas>
-    </div>
-    <div class="stage" id="stage" hidden>
-      <img id="stage-img" alt="" hidden>
-      <video id="stage-video" muted loop playsinline hidden></video>
-      <canvas id="stage-fx"></canvas>
-      <div class="stage-vignette"></div>
-      <div class="stage-lockup">INFINITE RADIO · <span id="stage-station">Infinite Radio</span></div>
-      <div class="stage-card minimal" id="stage-card" hidden>
-        <div class="stage-kicker">NOW PLAYING · <span id="stage-num">01</span></div>
-        <div class="stage-title"><span class="stage-n" id="stage-n">01</span><span id="stage-title">—</span></div>
-        <div class="stage-tags" id="stage-tags"></div>
-      </div>
-      <div class="stage-empty" id="stage-empty">Add a scene to see your set the way the episode will look.</div>
-    </div>
-
-    <div id="setup" class="setup" hidden>
-      <div class="setup-grid">
-        <label class="field"><span>Set name</span><input id="su-name" type="text" autocomplete="off"></label>
-        <label class="field"><span>Planned length</span>
-          <select id="su-length"><option value="0">Open-ended</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option><option value="90">90 min</option><option value="120">2 hours</option></select>
-        </label>
-      </div>
-      <div class="setup-line">
-        <span class="k">Scene</span>
-        <span id="su-scene">—</span>
-        <label class="linkish file-btn">Change image or loop<input id="su-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,image/gif" hidden></label>
-        <button id="su-scene-clear" class="linkish" hidden>Remove</button>
-      </div>
-      <div class="setup-line">
-        <span class="k">Opening section</span>
-        <span id="su-vibe">—</span>
-        <button id="su-edit" class="linkish">Edit in Station</button>
-      </div>
-      <div class="setup-line">
-        <span class="k">Ambience</span>
-        <span id="su-amb">Off</span>
-        <button id="su-amb-edit" class="linkish">Change</button>
-      </div>
-      <p class="hint">Your station settings become the first section. Save the station during the set to start a new section; skip cuts a song from the set.</p>
-      <div class="setup-actions">
-        <button id="su-cancel" class="linkish">Cancel</button>
-        <button id="su-start" class="btn btn-primary">Start set</button>
-      </div>
-    </div>
-
-    <div class="np">
-      <div class="np-kicker" id="np-kicker">Nothing playing</div>
-      <h1 id="np-title">Tune in to start the station</h1>
-      <div class="np-meta" id="np-meta"></div>
-    </div>
-
-    <div class="transport">
-      <button id="btn-like" class="icon-btn" title="Bookmark"><svg class="bm" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
-      <button id="btn-play" class="play-btn" title="Play / pause">
-        <span class="play-icon">▶</span>
-      </button>
-      <button id="btn-skip" class="icon-btn" title="Skip">⏭</button>
-      <a id="btn-download" class="icon-btn" title="Download WAV" download>⤓</a>
-    </div>
-
-    <div class="progress">
-      <span id="t-cur">0:00</span>
-      <input id="seek" type="range" min="0" max="1000" value="0">
-      <span id="t-dur">0:00</span>
-    </div>
-
-    <div class="tune-row">
-      <button id="btn-tune" class="btn btn-primary">Tune in</button>
-      <button id="btn-stop" class="btn btn-ghost" hidden>Go off air</button>
-      <button id="btn-set-start" class="btn btn-ghost">Start a set</button>
-      <div id="buffering" class="buffering" hidden>
-        <span class="spinner"></span>
-        <span id="buffering-text">Buffering first song…</span>
-      </div>
-    </div>
-
-    <div id="setbar" class="setbar" hidden>
-      <span class="rec-dot"></span>
-      <span class="setbar-name" id="setbar-name">Set</span>
-      <span class="setbar-meta"><span id="setbar-clock">00:00</span><span id="setbar-plan"></span> · <span id="setbar-kept">0 kept</span> · <span id="setbar-cut">0 cut</span></span>
-      <span class="setbar-hint">Skip = cut from the set · Save station = new section</span>
-      <button id="btn-set-close" class="btn btn-ghost small">Close set</button>
-    </div>
-
-    <div class="lyrics-wrap">
-      <h3>Lyrics</h3>
-      <pre id="lyrics" class="lyrics">—</pre>
-    </div>
-    <audio id="audio" preload="auto"></audio>
-  </section>
-
-  <!-- Queue / Library / Episodes / Engine -->
-  <aside class="panel side">
+<!-- Up next / Library / Episodes / Engine drawer -->
+<aside class="drawer right side" id="drawer-side" aria-label="Up next, library, episodes and engine">
+  <div class="drawer-head">
     <div class="tabs">
       <button class="tab active" data-tab="queue">Up next</button>
       <button class="tab" data-tab="library">Library</button>
       <button class="tab" data-tab="episodes">Episodes</button>
       <button class="tab" data-tab="engine">Engine</button>
     </div>
-
+    <div class="drawer-tools">
+      <button class="ibtn small pin" data-pin="side" title="Keep open beside the player" aria-label="Pin"><svg class="ico"><use href="#i-pin"/></svg></button>
+      <button class="ibtn small" data-close="side" title="Close (Esc)" aria-label="Close"><svg class="ico"><use href="#i-close"/></svg></button>
+    </div>
+  </div>
+  <div class="drawer-body">
     <div id="tab-queue" class="tab-body">
       <div id="gen-card" class="gen-card" hidden>
         <div class="gen-head">
@@ -236,12 +291,13 @@
 
     <div id="tab-episodes" class="tab-body" hidden>
       <section class="ep-section">
-        <h3>Scene <span class="hint inline">the picture behind every episode</span></h3>
+        <h3>Scene <span class="hint inline">the picture behind the player and every episode</span></h3>
         <div class="scene-row">
           <div id="scene-preview" class="scene-preview"><span class="hint">No scene yet. Add an image or a loop.</span></div>
           <div class="scene-actions">
             <label class="btn btn-ghost small file-btn">Choose image or loop<input id="scene-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,image/gif" hidden></label>
             <button id="scene-clear" class="linkish" hidden>Remove</button>
+            <label class="chk" id="scene-live-row" hidden><input type="checkbox" id="scene-live"> Show behind the player (V)</label>
             <p id="scene-note" class="hint">JPG, PNG or WebP get animated. GIF, MP4 or WebM loops are used as they are (MP4/WebM look better than GIF).</p>
           </div>
         </div>
@@ -349,9 +405,10 @@
       <pre id="engine-log" class="log"></pre>
       <button id="engine-restart" class="btn btn-ghost">Restart audio.cpp</button>
       <button id="amb-remove-model" class="btn btn-ghost" hidden>Remove ambience model</button>
+      <p class="hint shortcuts">Keys: Space play or pause · N skip · B bookmark · S station · Q up next · E episodes · L lyrics · V scene or visualizer · F full screen · Esc close</p>
     </div>
-  </aside>
-</main>
+  </div>
+</aside>
 
 <div id="toast" class="toast" hidden><span id="toast-text"></span><button id="toast-action" class="linkish" hidden></button></div>
 <script src="/static/app.js"></script>
