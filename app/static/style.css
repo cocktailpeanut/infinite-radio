@@ -511,6 +511,7 @@ details.more summary { cursor: pointer; color: var(--muted); font-size: 12.5px; 
 .setup-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--text); padding: 6px 0; border-top: 1px solid var(--panel-border); }
 .setup-line .k { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); min-width: 120px; }
 .setup-line .linkish { padding: 0 4px; }
+.setup-line > span:not(.k) { min-width: 0; overflow-wrap: anywhere; }  /* unbroken text wraps instead of widening the panel */
 .setup .hint { margin: 0; }
 .setup-actions { display: flex; justify-content: flex-end; align-items: center; gap: 14px; padding-top: 4px; }
 .setup-actions .btn { width: auto; padding: 11px 22px; }

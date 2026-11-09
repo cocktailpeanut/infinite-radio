@@ -389,13 +389,22 @@
     body.classList.toggle("setup-open", on);
     if (!on) return;
     const sc = state.scene;
-    $("su-scene").textContent = !sc || sc.kind === "none" ? "none yet (a mood-colored card is used)" : `${sc.kind === "image" ? "image" : "loop"} · ${sc.original_name || sc.file}`;
+    const file = sc && sc.kind !== "none" ? (sc.original_name || sc.file || "") : "";
+    $("su-scene").textContent = !file ? "none yet (a mood-colored card is used)" : `${sc.kind === "image" ? "image" : "loop"} · ${shortName(file)}`;
+    $("su-scene").title = file;
     $("su-scene-clear").hidden = !sc || sc.kind === "none";
     const ab = state.status?.ambience;
     $("su-amb").textContent = ab && ab.enabled ? `${ab.label} · ${ab.level_db} dB under the music` : "Off";
     const vibe = $("su-vibe");
     vibe.textContent = describeVibe(state.status?.settings) + (state.settingsDirty ? "  (unsaved edits in Station — save to use them)" : "");
     vibe.classList.toggle("unsaved", !!state.settingsDirty);
+  };
+  // Long file names (often random IDs) are cut in the middle so the extension stays visible.
+  const shortName = (name, max = 44) => {
+    if (name.length <= max) return name;
+    const dot = name.lastIndexOf("."), ext = dot > 0 && name.length - dot <= 6 ? name.slice(dot) : "";
+    const keep = max - ext.length - 1, head = Math.ceil(keep * 0.6);
+    return `${name.slice(0, head)}…${name.slice(name.length - ext.length - (keep - head), name.length - ext.length)}${ext}`;
   };
   const openSetup = async () => {
     state.setup = true;
