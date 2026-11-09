@@ -292,7 +292,7 @@ cd app
 python -m venv env && . env/bin/activate      # Windows: env\Scripts\activate
 pip install -r requirements.txt
 # put an audio.cpp release in app/bin and the YuE2 GGUF package in app/models/Yue2-3B-GGUF
-# ffmpeg must be on PATH for episode rendering
+# ffmpeg must be on PATH for episode rendering (Pinokio's environment already provides it)
 python tools/extract_bin.py --version v0.9.4
 python server.py
 ```

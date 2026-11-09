@@ -130,13 +130,6 @@ module.exports = {
       method: "fs.download",
       params: { url: llama("ubuntu-x64.tar.gz"), dir: "app/bin/llama" }
     },
-    // ---- ffmpeg for episode rendering (Pinokio's conda base usually ships it; make it explicit) ----
-    {
-      method: "shell.run",
-      params: {
-        message: "conda install -y -c conda-forge ffmpeg"
-      }
-    },
     // ---- web app dependencies ----
     {
       method: "shell.run",
