@@ -15,6 +15,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
+import uuid
+from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,7 +36,7 @@ from engine import AudioCppEngine, EngineError  # noqa: E402
 from episodes import EpisodeRenderer  # noqa: E402
 from lyricwriter import LANGUAGES, TIER_LABEL  # noqa: E402
 from radio import MOODS, PRESETS, Library, Radio  # noqa: E402
-from scene import Scene  # noqa: E402
+from scene import SCENE_DIR, UPLOAD_MAX_BYTES, Scene  # noqa: E402
 from sets import SetManager  # noqa: E402
 
 APP_DIR = Path(__file__).resolve().parent
@@ -580,15 +582,42 @@ def put_scene(patch: ScenePatch):
     return scene.update_settings({k: v for k, v in patch.model_dump().items() if v is not None})
 
 
+async def _stream_upload(file: UploadFile, dest: Path) -> int:
+    """Copy an upload to disk in 1 MB chunks (never whole in memory); enforce the size cap."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > UPLOAD_MAX_BYTES:
+                    raise HTTPException(413, f"file too large ({UPLOAD_MAX_BYTES // 1024 ** 3} GB max)")
+                f.write(chunk)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    if size == 0:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, "empty file")
+    return size
+
+
 @app.post("/api/scene/upload")
 async def upload_scene(file: UploadFile = File(...)):
-    data = await file.read()
-    if len(data) > 300 * 1024 * 1024:
-        raise HTTPException(413, "file too large (300 MB max)")
+    name = file.filename or "scene"
+    tmp = SCENE_DIR / f"_upload_{uuid.uuid4().hex[:8]}{Path(name).suffix.lower()[:8]}"
+    await _stream_upload(file, tmp)
     try:
-        return scene.save_upload(file.filename or "scene", data)
+        return await run_in_threadpool(scene.save_upload_file, name, tmp)
     except ValueError as e:
+        tmp.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
+    except Exception as e:  # unreadable image, etc.
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(400, f"could not read that file: {e}")
 
 
 @app.delete("/api/scene")
@@ -671,14 +700,8 @@ def cancel_ambience():
 
 @app.post("/api/ambience/upload")
 async def upload_ambience(file: UploadFile = File(...)):
-    data = await file.read()
-    if len(data) > 300 * 1024 * 1024:
-        raise HTTPException(413, "file too large (300 MB max)")
-    if not data:
-        raise HTTPException(400, "empty file")
-    tmp = APP_DIR / "data" / "ambience" / f"_upload_{os.getpid()}_{len(data)}{Path(file.filename or 'audio').suffix[:8]}"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_bytes(data)
+    tmp = APP_DIR / "data" / "ambience" / f"_upload_{uuid.uuid4().hex[:8]}{Path(file.filename or 'audio').suffix[:8]}"
+    await _stream_upload(file, tmp)
     label = Path(file.filename or "Uploaded audio").stem[:40] or "Uploaded audio"
     try:
         ambience.from_file(tmp, label, "upload")

@@ -61,6 +61,26 @@
     const ct = res.headers.get("content-type") || "";
     return ct.includes("json") ? res.json() : res.text();
   };
+  // Multipart upload with progress (fetch cannot report upload progress); large videos take a while.
+  const uploadFile = (path, file) => new Promise((resolve, reject) => {
+    const fd = new FormData(); fd.append("file", file, file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    const mb = (n) => (n / 1048576).toFixed(0);
+    if (file.size > 20 * 1048576) {
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) toast(`Uploading ${file.name}: ${Math.floor((e.loaded / e.total) * 100)}% (${mb(e.loaded)} of ${mb(e.total)} MB)`, true); };
+      xhr.upload.onload = () => toast(`Uploaded ${file.name}. Preparing…`, true);
+    }
+    xhr.onload = () => {
+      let body = null; try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(body);
+      const detail = body && body.detail !== undefined ? body.detail : xhr.statusText;
+      const err = new Error(typeof detail === "string" ? detail : (detail.code || "upload failed"));
+      err.status = xhr.status; err.detail = detail; reject(err);
+    };
+    xhr.onerror = () => reject(new Error("upload failed (connection lost)"));
+    xhr.send(fd);
+  });
 
   // ---------- full-screen shell: drawers, idle chrome, lyrics, full screen ----------
   // The backdrop fills the window. Controls (.chrome) fade after a few idle seconds while a
@@ -424,8 +444,7 @@
   };
   $("su-file").onchange = async (ev) => {
     const f = ev.target.files[0]; if (!f) return;
-    const fd = new FormData(); fd.append("file", f, f.name);
-    try { state.scene = await api("/api/scene/upload", { method: "POST", body: fd }); renderScene(); renderSetup(); renderStage(true); }
+    try { state.scene = await uploadFile("/api/scene/upload", f); renderScene(); renderSetup(); renderStage(true); }
     catch (e) { toast(e.message); }
     ev.target.value = "";
   };
@@ -474,13 +493,20 @@
       const k = el.dataset.scene, v = sc.settings[k];
       if (el.type === "checkbox") el.checked = !!v; else el.value = v;
     });
+    // Ping-pong reverses the clip in memory, so it is only offered for short clips.
+    const pp = box.querySelector("[data-scene=pingpong]"), ppNote = $("pingpong-note");
+    if (pp) {
+      const ok = sc.pingpong_ok !== false;
+      pp.disabled = !ok;
+      if (!ok) pp.checked = false;
+      if (ppNote) ppNote.textContent = ok ? "" : `only for clips up to ${Math.round(sc.pingpong_max_seconds || 15)} s; this one is ${fmt(sc.duration || 0)}`;
+    }
     if (!sc.ffmpeg) toast("ffmpeg was not found. Run Install again from the Pinokio menu to render episodes.");
   };
   const loadScene = async () => { state.scene = await api("/api/scene"); renderScene(); };
   $("scene-file").onchange = async (ev) => {
     const f = ev.target.files[0]; if (!f) return;
-    const fd = new FormData(); fd.append("file", f, f.name);
-    try { state.scene = await api("/api/scene/upload", { method: "POST", body: fd }); renderScene(); renderStage(true); toast("Scene updated.", true); }
+    try { state.scene = await uploadFile("/api/scene/upload", f); renderScene(); renderStage(true); toast("Scene updated.", true); }
     catch (e) { toast(e.message); }
     ev.target.value = "";
   };
@@ -1049,8 +1075,7 @@
   $("amb-cancel").onclick = async () => { try { state.amb = await api("/api/ambience/cancel", { method: "POST" }); renderAmbience(); } catch (e) { toast(e.message); } };
   $("amb-file").onchange = async (ev) => {
     const f = ev.target.files[0]; ev.target.value = ""; if (!f) return;
-    const fd = new FormData(); fd.append("file", f, f.name);
-    try { state.amb = await api("/api/ambience/upload", { method: "POST", body: fd }); renderAmbience(); } catch (e) { toast(e.message); }
+    try { state.amb = await uploadFile("/api/ambience/upload", f); renderAmbience(); } catch (e) { toast(e.message); }
   };
   $("amb-scene").onclick = async () => { try { state.amb = await api("/api/ambience/from-scene", { method: "POST" }); renderAmbience(); } catch (e) { toast(e.message); } };
   $("amb-clear").onclick = async () => { state.ambPreview = false; state.amb = await api("/api/ambience", { method: "DELETE" }); renderAmbience(); refresh(); };

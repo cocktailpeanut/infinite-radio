@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 
 from engine import APP_DIR
 from mixer import format_timestamp, mix_tracks
-from scene import FPS, H, W, MOOD_PALETTES, Scene, find_ffmpeg
+from scene import FPS, H, W, MOOD_PALETTES, Scene, find_ffmpeg, video_filter_chain
 from genre import derive_genre
 from lyricwriter import LANGUAGE_NAMES
 from typo import accent_from_palette, intro_overlay, lockup, minimal_card, now_playing_card, poster
@@ -222,9 +222,9 @@ class EpisodeRenderer:
         self._check_cancel(job_id)
 
         # 2. Scene loop
-        self._update(job_id, status="scene", step="Rendering scene loop", progress=0.2)
-        loop_path, loop_seconds = self.scene.ensure_loop(job["mood"], job["name"],
-                                                         progress=lambda f: self._update(job_id, progress=0.2 + 0.3 * f))
+        self._update(job_id, status="scene", step="Preparing scene", progress=0.2)
+        bg = self.scene.background(job["mood"], job["name"],
+                                   progress=lambda f: self._update(job_id, step="Rendering scene loop", progress=0.2 + 0.3 * f))
         self._check_cancel(job_id)
 
         # 3. Cards
@@ -235,13 +235,13 @@ class EpisodeRenderer:
         # 4. Encode
         self._update(job_id, status="encoding", step="Encoding video", progress=0.52)
         out_mp4 = folder / "episode.mp4"
-        self._encode(ffmpeg, job_id, loop_path, work / "episode.wav", cards, total, out_mp4)
+        self._encode(ffmpeg, job_id, bg, work / "episode.wav", cards, total, out_mp4)
         self._check_cancel(job_id)
 
         # 5. Thumbnail + text outputs
         self._update(job_id, step="Writing thumbnail and description", progress=0.97)
         job["duration"] = total
-        thumb = self._thumbnail(ffmpeg, job, loop_path, folder / "thumbnail.png")
+        thumb = self._thumbnail(ffmpeg, job, bg, folder / "thumbnail.png")
         desc = self._description(job, tracks, total)
         (folder / "description.txt").write_text(desc, encoding="utf-8")
         (folder / "tracklist.json").write_text(json.dumps({
@@ -405,12 +405,12 @@ class EpisodeRenderer:
         self._encoder_cache[key] = chosen
         return chosen
 
-    def _encode(self, ffmpeg: str, job_id: str, loop: Path, wav: Path, cards: dict, total: float, out: Path) -> None:
+    def _encode(self, ffmpeg: str, job_id: str, bg: dict, wav: Path, cards: dict, total: float, out: Path) -> None:
         settings = self.scene.snapshot().get("settings", {})
         enc = self._video_encoder(ffmpeg, bool(settings.get("hw_encode", True)))
         intro_fo = max(CARD_FADE_IN, INTRO_SECONDS - CARD_FADE_OUT)
         cmd = [ffmpeg, "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
-               "-stream_loop", "-1", "-i", str(loop),                                   # 0: scene loop
+               "-stream_loop", "-1", "-i", str(bg["path"]),                             # 0: scene (prepared loop or the original video)
                "-i", str(wav),                                                           # 1: mix
                "-loop", "1", "-framerate", str(FPS), "-t", f"{INTRO_SECONDS:.3f}", "-i", str(cards["intro"]),  # 2: intro (6 s only)
                "-safe", "0", "-f", "concat", "-i", str(cards["cards"]),                 # 3: card sequence (VFR)
@@ -418,7 +418,9 @@ class EpisodeRenderer:
                "-filter_complex",
                f"[2:v]format=rgba,fade=t=in:st=0:d={CARD_FADE_IN}:alpha=1,fade=t=out:st={intro_fo:.3f}:d={CARD_FADE_OUT}:alpha=1[intro];"
                f"[3:v]format=rgba[cards];[4:v]format=rgba[lock];"
-               f"[0:v][intro]overlay=0:0:eof_action=pass[v1];"
+               # A raw video is fitted, grained and vignetted here, in the same pass as the overlays.
+               + (f"[0:v]{bg['vf']}[bg];[bg][intro]overlay=0:0:eof_action=pass[v1];" if bg.get("vf") else
+                  "[0:v][intro]overlay=0:0:eof_action=pass[v1];") +
                f"[v1][cards]overlay={self.CARD_X}:{self.CARD_Y}:eof_action=pass[v2];"
                f"[v2][lock]overlay={cards['lockup_x']}:{cards['lockup_y']}:eof_action=repeat,format=yuv420p[vout]",
                "-map", "[vout]", "-map", "1:a", "-t", f"{total:.3f}", "-r", str(FPS),
@@ -444,11 +446,16 @@ class EpisodeRenderer:
         if code != 0:
             raise RuntimeError(f"ffmpeg encode failed: {err[-600:]}")
 
-    def _thumbnail(self, ffmpeg: str, job: dict, loop: Path, out: Path) -> Path | None:
+    def _thumbnail(self, ffmpeg: str, job: dict, bg: dict, out: Path) -> Path | None:
         frame = out.with_name("_frame.png")
-        res = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-ss", "2", "-i", str(loop), "-frames:v", "1", str(frame)],
-                             capture_output=True, encoding="utf-8", errors="replace")
-        if res.returncode != 0 or not frame.exists():
+        fit = ["-vf", video_filter_chain({}, finish=False)] if bg.get("vf") else []
+        for ss in ("2", "0"):  # clips shorter than 2 s have no frame at 2 s
+            frame.unlink(missing_ok=True)
+            res = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-ss", ss, "-i", str(bg["path"]), *fit, "-frames:v", "1",
+                                  str(frame)], capture_output=True, encoding="utf-8", errors="replace")
+            if res.returncode == 0 and frame.exists():
+                break
+        else:
             return None
         img = poster(Image.open(frame), job["name"], len(job["tracks"]), format_timestamp(job["duration"] or 0),
                      job["station"], self._accent(job))

@@ -309,7 +309,7 @@
             <label class="btn btn-ghost small file-btn">Choose image or loop<input id="scene-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,image/gif" hidden></label>
             <button id="scene-clear" class="linkish" hidden>Remove</button>
             <label class="chk" id="scene-live-row" hidden><input type="checkbox" id="scene-live"> Show behind the player (V)</label>
-            <p id="scene-note" class="hint">JPG, PNG or WebP get animated. GIF, MP4 or WebM loops are used as they are (MP4/WebM look better than GIF).</p>
+            <p id="scene-note" class="hint">JPG, PNG or WebP get animated. GIF, MP4 or WebM loops and long videos (up to 8 GB) are used as they are; MP4/WebM look better than GIF.</p>
           </div>
         </div>
         <div class="scene-settings is-none" id="scene-settings">
@@ -318,7 +318,7 @@
           <label class="chk image-only"><input type="checkbox" data-scene="flicker"> Light flicker</label>
           <label class="chk"><input type="checkbox" data-scene="grain"> Grain</label>
           <label class="chk"><input type="checkbox" data-scene="vignette"> Vignette</label>
-          <label class="chk video-only"><input type="checkbox" data-scene="pingpong"> Ping-pong loop</label>
+          <label class="chk video-only"><input type="checkbox" data-scene="pingpong"> Ping-pong loop <small id="pingpong-note" class="field-note"></small></label>
           <label class="chk" title="VideoToolbox, NVENC, AMF or QuickSync when available; falls back to libx264"><input type="checkbox" data-scene="hw_encode"> Hardware encoder</label>
           <label class="field inline-field image-only"><span>Weather</span>
             <select data-scene="weather"><option value="none">None</option><option value="rain">Rain</option><option value="snow">Snow</option><option value="leaves">Leaves</option><option value="dust">Dust</option></select>

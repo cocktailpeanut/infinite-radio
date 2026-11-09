@@ -170,6 +170,7 @@ songs for a target length, or use **Select** in the Library to pick songs by han
 |---|---|
 | JPG, PNG, WebP | Slow camera drift, weather (rain, snow, leaves, dust), fog, lamp flicker, grain and vignette are rendered on top as a seamless loop |
 | GIF, MP4, WebM, MOV loop | Fitted to 16:9, frame rate normalized, embedded audio dropped, optional ping-pong; grain and vignette available |
+| Long video (up to 8 GB) | Used directly: fitted, grained and vignetted during the episode encode itself, so a one-hour video adds no preparation time; it loops if shorter than the episode. Ping-pong is limited to clips of 15 s or less |
 | nothing | A mood-colored title card |
 
 **Song titles** on screen (Scene panel, applies to the live stage and to episodes):

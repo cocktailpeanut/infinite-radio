@@ -9,6 +9,7 @@ loop that ffmpeg repeats for the whole episode.
 from __future__ import annotations
 
 import hashlib
+import uuid
 import json
 import math
 import os
@@ -46,6 +47,12 @@ DEFAULT_SETTINGS = {
     "title_style": "minimal",  # minimal | card | none  (song titles on screen)
     "subtitle": "none",        # none | genre | mood | language  (line under the title)
 }
+
+# Ping-pong (forward then reversed) needs every frame of the clip in memory: ~3 MB per 1080p frame,
+# so it is limited to short clips (15 s at 30 fps is about 1.4 GB).
+PINGPONG_MAX_SECONDS = 15.0
+# Upload cap for scene and ambience files; uploads stream to disk, so this only guards disk space.
+UPLOAD_MAX_BYTES = 8 * 1024 ** 3
 
 TITLE_STYLES = ("minimal", "card", "none")
 SUBTITLE_SOURCES = ("none", "genre", "mood", "language")
@@ -134,6 +141,9 @@ class Scene:
             s["settings"] = dict(self.state["settings"])
             s["ffmpeg"] = find_ffmpeg() is not None
             s["defaults"] = DEFAULT_SETTINGS
+            s["pingpong_max_seconds"] = PINGPONG_MAX_SECONDS
+            s["pingpong_ok"] = self.state["kind"] != "video" or (self.state.get("duration") or 0) <= PINGPONG_MAX_SECONDS
+            s["upload_max_bytes"] = UPLOAD_MAX_BYTES
             return s
 
     def update_settings(self, patch: dict) -> dict:
@@ -158,6 +168,13 @@ class Scene:
         return self.snapshot()
 
     def save_upload(self, filename: str, data: bytes) -> dict:
+        """Compatibility wrapper: write bytes to a temp file and import it."""
+        tmp = SCENE_DIR / f"_upload_{uuid.uuid4().hex[:8]}{Path(filename).suffix.lower()[:8]}"
+        tmp.write_bytes(data)
+        return self.save_upload_file(filename, tmp)
+
+    def save_upload_file(self, filename: str, tmp: Path) -> dict:
+        """Import an uploaded file that has already been streamed to `tmp` (moved into place, not copied)."""
         ext = Path(filename).suffix.lower()
         if ext in IMAGE_EXT:
             kind = "image"
@@ -167,7 +184,7 @@ class Scene:
             raise ValueError("unsupported file type; use an image (jpg, png, webp) or a loop (gif, mp4, webm, mov)")
         if kind == "image":
             # Re-encode through Pillow so odd formats and EXIF rotation are handled once.
-            img = Image.open(__import__("io").BytesIO(data))
+            img = Image.open(tmp)
             try:
                 from PIL import ImageOps
                 img = ImageOps.exif_transpose(img)
@@ -176,15 +193,21 @@ class Scene:
             img = img.convert("RGB")
             dest = SCENE_DIR / "scene.png"
             img.save(dest, "PNG")
+            img.close()
+            tmp.unlink(missing_ok=True)
         else:
             dest = SCENE_DIR / f"scene{ext}"
-            dest.write_bytes(data)
+            dest.unlink(missing_ok=True)
+            shutil.move(str(tmp), str(dest))
         has_audio = kind == "video" and ext != ".gif" and _has_audio(dest)
+        ffmpeg = find_ffmpeg()
+        duration = _probe_duration(ffmpeg, dest) if kind == "video" and ffmpeg else None
         with self.lock:
             for old in SCENE_DIR.glob("scene.*"):
                 if old != dest:
                     old.unlink(missing_ok=True)
-            self.state.update({"kind": kind, "file": dest.name, "original_name": filename, "has_audio": has_audio})
+            self.state.update({"kind": kind, "file": dest.name, "original_name": filename, "has_audio": has_audio,
+                               "duration": round(duration, 2) if duration else None})
             self._save()
         return self.snapshot()
 
@@ -192,7 +215,7 @@ class Scene:
         with self.lock:
             for old in SCENE_DIR.glob("scene.*"):
                 old.unlink(missing_ok=True)
-            self.state.update({"kind": "none", "file": None, "original_name": None, "has_audio": False})
+            self.state.update({"kind": "none", "file": None, "original_name": None, "has_audio": False, "duration": None})
             self._save()
         return self.snapshot()
 
@@ -211,6 +234,33 @@ class Scene:
             payload = json.dumps({"kind": self.state["kind"], "stamp": stamp, "settings": visual,
                                   "mood": mood if self.state["kind"] == "none" else "", "title": title if self.state["kind"] == "none" else ""}, sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()[:16]
+
+    def background(self, mood: str, title: str, progress=None) -> dict:
+        """What the episode encode should use as its picture.
+
+        Returns {"path", "seconds", "vf"}. With `vf` None the file is a prepared 1080p30 loop.
+        Otherwise it is the original video and `vf` is the filter chain to apply in the encode
+        itself, so a long video costs one pass instead of a full-length pre-render plus a pass.
+        Images, GIFs and short ping-pong clips still use a prepared, cached loop.
+        """
+        with self.lock:
+            kind, file, settings = self.state["kind"], self.state["file"], dict(self.state["settings"])
+            duration = self.state.get("duration")
+        if kind == "video":
+            src = SCENE_DIR / file
+            if duration is None:
+                ffmpeg = find_ffmpeg()
+                duration = _probe_duration(ffmpeg, src) if ffmpeg else 0.0
+                with self.lock:
+                    self.state["duration"] = round(duration, 2) if duration else None
+                    self._save()
+            wants_pingpong = bool(settings.get("pingpong")) and (duration or 0) <= PINGPONG_MAX_SECONDS
+            if src.suffix.lower() != ".gif" and not wants_pingpong:
+                if progress:
+                    progress(1.0)
+                return {"path": src, "seconds": float(duration or 0), "vf": video_filter_chain(settings)}
+        path, seconds = self.ensure_loop(mood, title, progress)
+        return {"path": path, "seconds": seconds, "vf": None}
 
     def ensure_loop(self, mood: str, title: str, progress=None) -> tuple[Path, float]:
         """Return (loop.mp4 path, loop seconds), rendering if not cached."""
@@ -434,17 +484,26 @@ def _probe_duration(ffmpeg: str, path: Path) -> float:
         return 0.0
 
 
+def video_filter_chain(settings: dict, finish: bool = True) -> str:
+    """Fit any video to 1920x1080 at 30 fps; with `finish`, add the grain and vignette options."""
+    vf = [f"scale={W}:{H}:force_original_aspect_ratio=increase", f"crop={W}:{H}", f"fps={FPS}", "format=yuv420p"]
+    if finish and settings.get("grain", True):
+        vf.append("noise=alls=6:allf=t")
+    if finish and settings.get("vignette", True):
+        vf.append("vignette=PI/5")
+    return ",".join(vf)
+
+
 def _normalize_video_loop(src: Path, out: Path, settings: dict, progress=None) -> float:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found")
-    vf = [f"scale={W}:{H}:force_original_aspect_ratio=increase", f"crop={W}:{H}", f"fps={FPS}", "format=yuv420p"]
-    if settings.get("grain", True):
-        vf.append("noise=alls=6:allf=t")
-    if settings.get("vignette", True):
-        vf.append("vignette=PI/5")
-    chain = ",".join(vf)
-    if settings.get("pingpong", False):
+    chain = video_filter_chain(settings)
+    duration = _probe_duration(ffmpeg, src)
+    if src.suffix.lower() == ".gif":
+        duration = min(duration or 60.0, 60.0)
+    # Reversing holds the whole clip in memory; never do it for long clips.
+    if settings.get("pingpong", False) and 0 < duration <= PINGPONG_MAX_SECONDS:
         filt = f"[0:v]{chain},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[v]"
     else:
         filt = f"[0:v]{chain}[v]"
